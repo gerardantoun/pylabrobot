@@ -24,6 +24,12 @@ bins, counted from the bin of the first event.
    following the drift between the two clocks from well to well.
 5. A well without a peak keeps the place timing predicts for it and is flagged; flagged wells
    between two found wells are spread evenly between them.
+6. Checks. Matching can put a well on another well's peak without flagging anything, so every
+   found well is checked afterwards. Within a run, the start of a well on the event clock less
+   the start of its sampling command is the same for every well, apart from slow drift and
+   jitter; a well whose difference is far from the run's median fails the timing check. A
+   well whose peak is much narrower or wider than a sip fails the width check. Any failure
+   makes the verdict ask for a review.
 
 The events of a well are those in its bins. Events arrive in time order, so they form one
 contiguous range of event indices.
@@ -33,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import math
+import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence, Tuple
 
@@ -40,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 Verdict = Literal["identified", "needs_review"]
 FirstWellOutcome = Literal["matched", "too_far", "no_peaks"]
+CheckName = Literal["timing", "width"]
 
 # Width of a histogram bin, in seconds.
 BIN_WIDTH = 0.1
@@ -92,6 +100,13 @@ PAUSE_FRACTION = 0.5
 DEFAULT_RUN_GAP = 50
 # A bin with at most this many events is quiet.
 QUIET_BIN_EVENTS = 1
+# A found well fails the timing check when its offset from its sampling command differs from
+# the median of its run by more than this fraction of the sip time plus the up time.
+TIMING_TOLERANCE_FACTOR = 0.45
+# A found well fails the width check when the peak it took is narrower than the first or wider
+# than the second of these multiples of the sip time.
+NARROW_WELL_FACTOR = 0.5
+WIDE_WELL_FACTOR = 1.65
 
 _PRIME_BINS = round(TUBING_TRANSIT_TIME / BIN_WIDTH)
 _BINS_PER_SECOND = round(1 / BIN_WIDTH)
@@ -132,6 +147,9 @@ class IdentifiedWell:
     end_time: Start of the well's last histogram bin; that bin belongs to the well.
     flagged: Whether the position was predicted from timing because no peak was found for
       the well.
+    failed_checks: The checks a found well failed: ``timing`` when its start does not keep
+      the spacing of the sampling commands of its run, ``width`` when the peak it took is much
+      narrower or wider than a sip. Flagged wells are not checked, so theirs is empty.
   """
 
   well: str
@@ -140,6 +158,7 @@ class IdentifiedWell:
   start_time: float
   end_time: float
   flagged: bool
+  failed_checks: Tuple[CheckName, ...] = ()
 
   @property
   def event_range(self) -> Optional[Tuple[int, int]]:
@@ -162,9 +181,11 @@ class WellIdentification:
 
   Attributes:
     wells: One entry per expected well, in sampling order.
-    verdict: ``identified`` when a peak was found for every well; ``needs_review`` when the
-      position of at least one well was predicted, in which case the caller should warn.
-    message: A sentence describing the verdict.
+    verdict: ``identified`` when a peak was found for every well and every well passed the
+      checks; ``needs_review`` when the position of at least one well was predicted or a well
+      failed a check, in which case the caller should warn.
+    message: A sentence describing the verdict, naming the wells that make it
+      ``needs_review``.
   """
 
   wells: Tuple[IdentifiedWell, ...]
@@ -175,6 +196,11 @@ class WellIdentification:
   def flagged_wells(self) -> Tuple[str, ...]:
     """The names of the wells whose position was predicted."""
     return tuple(well.well for well in self.wells if well.flagged)
+
+  @property
+  def inconsistent_wells(self) -> Tuple[str, ...]:
+    """The names of the found wells that failed a check."""
+    return tuple(well.well for well in self.wells if well.failed_checks)
 
   def event_ranges(self) -> Dict[str, Optional[Tuple[int, int]]]:
     """Return the event range of every well by well name.
@@ -270,12 +296,15 @@ class WellSpan:
     post_gap: Bins from the end of this well to the start of the next, as the sampler's
       timing gives them. It is not changed by matching.
     flagged: Whether no peak was found for the well.
+    peak: The peak the well took, pieces joined, before its end was adjusted; ``None`` while
+      it has taken none.
   """
 
   start: int
   end: int
   post_gap: int = 0
   flagged: bool = False
+  peak: Optional[Peak] = None
 
   @property
   def width(self) -> int:
@@ -726,6 +755,7 @@ def _take_peak(matching: _Matching, well: int, peak: Peak) -> None:
   span = matching.spans[well]
   span.start = peak.start
   span.end = well_end(peak.start, peak.end, matching.counts, matching.sip_bins)
+  span.peak = peak
 
 
 def _take_best(matching: _Matching, well: int, candidates: Sequence[int]) -> None:
@@ -894,6 +924,136 @@ def _match_wells(matching: _Matching, runs: Sequence[Tuple[int, int]]) -> None:
 
 
 # ---------------------------------------------------------------------------------------------
+# Checks
+# ---------------------------------------------------------------------------------------------
+
+
+def timing_outliers(
+  wells: Sequence[SampledWell],
+  spans: Sequence[WellSpan],
+  runs: Sequence[Tuple[int, int]],
+  offset: int,
+  sip_time: float,
+  up_time: float,
+) -> List[int]:
+  """Return the found wells whose start does not keep the spacing of their sampling commands.
+
+  A well's offset is the start of its first bin on the event clock less the start of its
+  sampling command on the command-log clock, in seconds. Within a run the two clocks differ by
+  the transit through the tubing, which changes only by slow drift, so every found well of a
+  run has about the same offset. A well whose offset differs from the median of its run's found
+  wells by more than `TIMING_TOLERANCE_FACTOR` times the sip time plus the up time fails.
+  Flagged wells were placed by timing and are not checked.
+
+  The tolerance comes from the size of the error it has to catch. A well on a neighbour's peak
+  is off by one sampling period, move plus sip plus up, so by at least sip plus up; when half a
+  run is off, the median lies halfway and every well of the run is off by at least half of
+  that. 0.45 of sip plus up stays below both, even with no time for the move. Against it stand
+  bin rounding (a start is known to 0.1 s), drift within a run and jitter. Synthetic reads were
+  made with every well's arrival jittered by 50 ms (standard deviation), Poisson event counts,
+  an event clock 0.4 % slow to 0.4 % fast and pauses 1.2 s shorter to 3 s longer than timed.
+  Over 2000 random clean 96- and 384-well reads (485,472 wells; sip 0.5 to 2 s, up 0.3 to
+  1 s) the largest deviation from a run's median was 0.334 s, 0.82 of that read's tolerance of
+  0.405 s (sip 0.5 s, up 0.4 s), and no well failed. With 75 ms of jitter, over 500 reads, the
+  largest was 0.90 of the tolerance, again without a failure. For the same protocols an evenly
+  split run is off by at least 1.34 times the tolerance.
+
+  The median sides with the majority of a run. When most of a run is off by one well, the
+  wells named are the ones still in place; either way the run needs review. A whole run off by
+  one well keeps its spacing and is not caught here; its last well, left without a peak, is
+  flagged.
+
+  Args:
+    wells: The sampled wells.
+    spans: Where matching put them, in histogram bins.
+    runs: The first and last well of each run, as :func:`sampling_runs` gives them.
+    offset: The bin number of the histogram's first bin.
+    sip_time: The sip time, in seconds.
+    up_time: The up time, in seconds.
+
+  Returns:
+    The indices of the wells that fail, in sampling order.
+  """
+  tolerance = TIMING_TOLERANCE_FACTOR * (sip_time + up_time)
+  outliers: List[int] = []
+  for first, last in runs:
+    offsets = {
+      index: bin_start(spans[index].start + offset) - wells[index].start
+      for index in range(first, last + 1)
+      if not spans[index].flagged
+    }
+    if not offsets:
+      continue
+    median = statistics.median(offsets.values())
+    outliers += [index for index, value in offsets.items() if abs(value - median) > tolerance]
+  return outliers
+
+
+def width_outliers(spans: Sequence[WellSpan], sip_bins: float) -> List[int]:
+  """Return the found wells whose peak is much narrower or much wider than a sip.
+
+  The width is that of the peak the well took, pieces joined, before :func:`well_end` widened
+  a narrow one. The probe draws from a well for one sip, so a well's peak is about a sip wide:
+  from 0.8 to 1.2 sips over the synthetic reads described at :func:`timing_outliers`, where
+  Poisson counts make the edge bins uncertain. A peak narrower than `NARROW_WELL_FACTOR`
+  sips holds less than half a well's sample: a piece of a split well, or noise. One wider than
+  `WIDE_WELL_FACTOR` sips is wider than any two pieces matching joins into one well, while two
+  wells run together are at least two sips wide.
+
+  Args:
+    spans: Where matching put the wells.
+    sip_bins: The sip time in bins.
+
+  Returns:
+    The indices of the wells that fail, in sampling order.
+
+  Raises:
+    RuntimeError: If a well is neither flagged nor on a peak, which matching never leaves.
+  """
+  outliers: List[int] = []
+  for index, span in enumerate(spans):
+    if span.flagged:
+      continue
+    if span.peak is None:
+      raise RuntimeError(f"well {index} is not flagged but took no peak")
+    width = span.peak.width
+    if width < NARROW_WELL_FACTOR * sip_bins or width > WIDE_WELL_FACTOR * sip_bins:
+      outliers.append(index)
+  return outliers
+
+
+def _failed_checks(
+  wells: Sequence[SampledWell],
+  matching: _Matching,
+  runs: Sequence[Tuple[int, int]],
+  offset: int,
+  sip_time: float,
+  up_time: float,
+) -> List[Tuple[CheckName, ...]]:
+  """Return, for every well, the checks it failed: ``timing``, ``width``, both or none.
+
+  Args:
+    wells: The sampled wells.
+    matching: The finished matching.
+    runs: The first and last well of each run.
+    offset: The bin number of the histogram's first bin.
+    sip_time: The sip time, in seconds.
+    up_time: The up time, in seconds.
+  """
+  timing = set(timing_outliers(wells, matching.spans, runs, offset, sip_time, up_time))
+  width = set(width_outliers(matching.spans, matching.sip_bins))
+  checks: List[Tuple[CheckName, ...]] = []
+  for index in range(len(wells)):
+    failed: List[CheckName] = []
+    if index in timing:
+      failed.append("timing")
+    if index in width:
+      failed.append("width")
+    checks.append(tuple(failed))
+  return checks
+
+
+# ---------------------------------------------------------------------------------------------
 # From bins to events
 # ---------------------------------------------------------------------------------------------
 
@@ -926,9 +1086,13 @@ def event_range(events_before: Sequence[int], start: int, end: int) -> Optional[
 
 
 def _identified(
-  well: SampledWell, span: WellSpan, histogram: TimeHistogram, events_before: Sequence[int]
+  well: SampledWell,
+  span: WellSpan,
+  checks: Tuple[CheckName, ...],
+  histogram: TimeHistogram,
+  events_before: Sequence[int],
 ) -> IdentifiedWell:
-  """Describe one matched well by its events and times."""
+  """Describe one matched well by its events, its times and the checks it failed."""
   events = event_range(events_before, span.start, span.end)
   start_time = bin_start(span.start + histogram.offset)
   return IdentifiedWell(
@@ -938,18 +1102,26 @@ def _identified(
     start_time=start_time,
     end_time=max(bin_start(span.end + histogram.offset), start_time),
     flagged=span.flagged,
+    failed_checks=checks,
   )
 
 
 def _outcome(wells: Sequence[IdentifiedWell]) -> WellIdentification:
   """Wrap identified wells with the verdict a caller can warn on."""
   flagged = [well.well for well in wells if well.flagged]
-  if not flagged:
+  failed = [well for well in wells if well.failed_checks]
+  if not flagged and not failed:
     return WellIdentification(tuple(wells), "identified", f"all {len(wells)} wells were found")
-  message = (
-    f"{len(flagged)} of {len(wells)} wells were placed by timing because no peak was found "
-    f"for them: {', '.join(flagged)}"
-  )
+  parts = []
+  if flagged:
+    parts.append(
+      f"{len(flagged)} of {len(wells)} wells were placed by timing because no peak was found "
+      f"for them: {', '.join(flagged)}"
+    )
+  if failed:
+    named = ", ".join(f"{well.well} ({' and '.join(well.failed_checks)})" for well in failed)
+    parts.append(f"{len(failed)} of {len(wells)} wells failed a check: {named}")
+  message = "; ".join(parts)
   logger.warning("well identification needs review: %s", message)
   return WellIdentification(tuple(wells), "needs_review", message)
 
@@ -994,8 +1166,9 @@ def identify_wells(
 
   Returns:
     One entry per well, in the order given, and a verdict. Wells without events of their own
-    are flagged and placed where timing predicts them; any flagged well makes the verdict
-    ``needs_review``.
+    are flagged and placed where timing predicts them; found wells whose start or width
+    disagrees with the sampler's timing carry the checks they failed. Any flagged well or
+    failed check makes the verdict ``needs_review``.
 
   Raises:
     WellIdentificationError: If the events hold no usable peak (too few events), or their
@@ -1021,10 +1194,15 @@ def identify_wells(
     sip_bins=sip_bins,
     up_bins=up_bins,
   )
-  _match_wells(matching, sampling_runs(wells))
+  runs = sampling_runs(wells)
+  _match_wells(matching, runs)
+  checks = _failed_checks(wells, matching, runs, histogram.offset, sip_time, up_time)
   events_before = events_before_bins(histogram.counts)
   return _outcome(
-    [_identified(well, span, histogram, events_before) for well, span in zip(wells, matching.spans)]
+    [
+      _identified(well, span, failed, histogram, events_before)
+      for well, span, failed in zip(wells, matching.spans, checks)
+    ]
   )
 
 

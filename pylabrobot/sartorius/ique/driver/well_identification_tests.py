@@ -2,6 +2,7 @@
 
 import array
 import math
+import random
 import unittest
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -29,6 +30,17 @@ def well_names(rows: int, columns: int) -> List[str]:
   return names
 
 
+def poisson(rng: random.Random, mean: float) -> int:
+  """Draw a Poisson-distributed count by multiplying uniform numbers (Knuth's method)."""
+  limit = math.exp(-mean)
+  count = 0
+  product = rng.random()
+  while product > limit:
+    count += 1
+    product *= rng.random()
+  return count
+
+
 class PlateRun:
   """A synthetic plate read: the sampler's command times and the events they produce.
 
@@ -38,6 +50,10 @@ class PlateRun:
   drew them: `per_tick` events on each 5 ms tick of the sip. The event clock runs at
   `clock_rate` times the sampler's clock, and each pause lasts `pause_extra` seconds longer in
   the events than the sampler's timing says.
+
+  With a random generator `rng`, each well's events arrive with an error drawn from a normal
+  distribution with a standard deviation of `jitter` seconds, and each tick holds a Poisson
+  number of events with mean `per_tick`.
   """
 
   def __init__(
@@ -54,6 +70,8 @@ class PlateRun:
     clock_rate: float = 1.0,
     pause_extra: float = 0.0,
     keep_tick: Optional[Dict[str, Callable[[int], bool]]] = None,
+    rng: Optional[random.Random] = None,
+    jitter: float = 0.0,
   ) -> None:
     """Lay out the commands of a plate read and generate its events."""
     self.sip = sip
@@ -70,14 +88,18 @@ class PlateRun:
         clock += pause
         lag += pause_extra
       self.wells.append(SampledWell(name, clock, clock + move + sip + up, new_row))
-      first_tick = round(((clock + move) * clock_rate + lag) / TICK)
+      arrival = (clock + move) * clock_rate + lag
+      if rng is not None:
+        arrival += rng.gauss(0.0, jitter)
+      first_tick = round(arrival / TICK)
       self.sip_starts[name] = first_tick * TICK
       first_event = len(times)
       keep = (keep_tick or {}).get(name, lambda tick: True)
       if name not in empty:
         for tick in range(round(sip / TICK)):
           if keep(tick):
-            times += [(first_tick + tick) * TICK] * per_tick
+            count = per_tick if rng is None else poisson(rng, per_tick)
+            times += [(first_tick + tick) * TICK] * count
       self.ranges[name] = (first_event, len(times) - 1) if len(times) > first_event else None
       clock += move + sip + up
     self.times = array.array("f", times)
@@ -87,9 +109,58 @@ class PlateRun:
     return wid.identify_wells(self.times if times is None else times, self.wells, self.sip, self.up)
 
 
+def random_clean_run(rng: random.Random) -> PlateRun:
+  """Return a read of a full plate with a random protocol, drift, longer pauses and jitter.
+
+  Half are 96-well reads (sip 0.8 to 2 s, up 0.3 to 1 s, move 0.6 to 1.5 s) and half 384-well
+  reads (sip 0.5 to 1 s, up 0.3 to 0.6 s, move 0.4 to 0.8 s). Every well arrives with 50 ms of
+  jitter (standard deviation), the event clock runs 0.4 % slow to 0.4 % fast, and pauses last
+  from 1.2 s less to 3 s more in the events than timed.
+  """
+  if rng.random() < 0.5:
+    rows, columns = 8, 12
+    sip, up = rng.randint(8, 20) / 10, rng.randint(3, 10) / 10
+    move, pause = rng.uniform(0.6, 1.5), rng.uniform(2.0, 10.0)
+  else:
+    rows, columns = 16, 24
+    sip, up = rng.randint(5, 10) / 10, rng.randint(3, 6) / 10
+    move, pause = rng.uniform(0.4, 0.8), rng.uniform(2.0, 6.0)
+  return PlateRun(
+    rows=rows,
+    columns=columns,
+    sip=sip,
+    up=up,
+    move=move,
+    pause=pause,
+    transit=rng.uniform(21.0, 40.0),
+    per_tick=rng.randint(1, 3),
+    clock_rate=rng.uniform(0.996, 1.004),
+    pause_extra=rng.uniform(-1.2, 3.0),
+    rng=rng,
+    jitter=0.05,
+  )
+
+
 def found_ranges(result: wid.WellIdentification) -> Dict[str, EventRange]:
   """Return the event range found for every well."""
   return {well.well: well.event_range for well in result.wells}
+
+
+def misplaced_wells(result: wid.WellIdentification, run: PlateRun) -> List[str]:
+  """Return the wells not given their own events.
+
+  A well is in place when its range holds the middle event of its own events and that of no
+  other well; an empty well when it holds no well's middle event. Unlike comparing ranges,
+  this allows for an edge bin of a few events lost to Poisson counts.
+  """
+  middles = {name: (span[0] + span[1]) // 2 for name, span in run.ranges.items() if span}
+  misplaced = []
+  for well in result.wells:
+    found = well.event_range
+    holds = [name for name, middle in middles.items() if found and found[0] <= middle <= found[1]]
+    if holds != ([well.well] if well.well in middles else []):
+      misplaced.append(well.well)
+  return misplaced
 
 
 def peak(start: int, end: int, height: int = 39, event_count: int = 390) -> Peak:
@@ -513,6 +584,63 @@ class WellRuleTests(unittest.TestCase):
     self.assertEqual(wid.average_run_gap(spans, runs, 2), 50.0)
 
 
+class CheckRuleTests(unittest.TestCase):
+  """The checks made on found wells after matching."""
+
+  wells = [SampledWell(f"W{index}", 2.5 * index, 2.5 * index + 2.5) for index in range(5)]
+
+  def test_timing_tolerance(self) -> None:
+    """A well fails when its offset is more than 0.45 of sip plus up from its run's median."""
+    # Every well starts 25 s after its command, except W2 by 25.5 s and W4 by 25.7 s. With a
+    # sip of 1 s and an up time of 0.5 s the tolerance is 0.675 s.
+    spans = [WellSpan(start, start + 10) for start in (250, 275, 305, 325, 357)]
+    self.assertEqual(wid.timing_outliers(self.wells, spans, [(0, 4)], 0, 1.0, 0.5), [4])
+    # Positions count from the histogram's first bin.
+    shifted = [WellSpan(span.start - 100, span.end - 100) for span in spans]
+    self.assertEqual(wid.timing_outliers(self.wells, shifted, [(0, 4)], 100, 1.0, 0.5), [4])
+    # A longer sip and up time widen the tolerance.
+    self.assertEqual(wid.timing_outliers(self.wells, spans, [(0, 4)], 0, 1.5, 0.5), [])
+
+  def test_timing_against_each_runs_median(self) -> None:
+    """Each run has its own offset; within one, wells half a run apart all fail."""
+    wells = [
+      SampledWell("A1", 0.0, 2.5),
+      SampledWell("A2", 2.5, 5.0),
+      SampledWell("B1", 9.0, 11.5, True),
+      SampledWell("B2", 11.5, 14.0),
+    ]
+    # Row B arrives 3 s later than timed: another offset, but the same spacing.
+    spans = [WellSpan(250, 260), WellSpan(275, 285), WellSpan(370, 380), WellSpan(395, 405)]
+    runs = wid.sampling_runs(wells)
+    self.assertEqual(wid.timing_outliers(wells, spans, runs, 0, 1.0, 0.5), [])
+    # Taken as one run the median lies halfway, 1.5 s from every well.
+    self.assertEqual(wid.timing_outliers(wells, spans, [(0, 3)], 0, 1.0, 0.5), [0, 1, 2, 3])
+
+  def test_timing_leaves_flagged_wells_out(self) -> None:
+    """Flagged wells are neither checked nor counted in the median."""
+    spans = [WellSpan(250, 260), WellSpan(400, 420, flagged=True), WellSpan(300, 310)]
+    self.assertEqual(wid.timing_outliers(self.wells[:3], spans, [(0, 2)], 0, 1.0, 0.5), [])
+    flagged = [WellSpan(250, 260, flagged=True), WellSpan(400, 420, flagged=True)]
+    self.assertEqual(wid.timing_outliers(self.wells[:2], flagged, [(0, 1)], 0, 1.0, 0.5), [])
+
+  def test_width_limits(self) -> None:
+    """A peak narrower than half a sip or wider than 1.65 sips fails."""
+    # With a sip of 10 bins a peak may be 5 to 16.5 bins wide.
+    spans = [
+      WellSpan(0, 8, peak=Peak(0, 4, 39, 160)),
+      WellSpan(20, 28, peak=Peak(20, 25, 39, 200)),
+      WellSpan(40, 56, peak=Peak(40, 56, 39, 640)),
+      WellSpan(60, 77, peak=Peak(60, 77, 39, 680)),
+      WellSpan(80, 100, flagged=True),
+    ]
+    self.assertEqual(wid.width_outliers(spans, 10.0), [0, 3])
+
+  def test_width_needs_the_peak_of_a_found_well(self) -> None:
+    """A well that is neither flagged nor on a peak is an error."""
+    with self.assertRaisesRegex(RuntimeError, "well 0 is not flagged but took no peak"):
+      wid.width_outliers([WellSpan(0, 10)], 10.0)
+
+
 # ---------------------------------------------------------------------------------------------
 # Whole plate reads
 # ---------------------------------------------------------------------------------------------
@@ -691,15 +819,24 @@ class DistortedPeakTests(unittest.TestCase):
     self.assertEqual(found_ranges(result), run.ranges)
 
   def test_as_many_peaks_as_wells_are_paired_in_order(self) -> None:
-    """With one peak per well, peaks and wells are paired without regard to timing."""
+    """With one peak per well, peaks and wells are paired without regard to timing.
+
+    The timing check afterwards finds that the pairing breaks the sampler's spacing.
+    """
     # With one peak per well the sampler's timing is not consulted: three bursts at 30 s,
     # 31.5 s and 40 s go to three wells that were sampled 2.5 s apart.
     wells = [SampledWell(name, 2.5 * index, 2.5 * index + 2.5) for index, name in enumerate("ABC")]
     times = [start + tick * TICK for start in (30.0, 31.5, 40.0) for tick in range(200)]
-    result = wid.identify_wells(times, wells, 1.0, 0.5)
-    self.assertEqual(result.verdict, "identified")
+    with self.assertLogs(wid.logger, "WARNING"):
+      result = wid.identify_wells(times, wells, 1.0, 0.5)
     self.assertEqual(found_ranges(result), {"A": (0, 199), "B": (200, 399), "C": (400, 599)})
     self.assertEqual([well.start_time for well in result.wells], [30.0, 31.4, 39.9])
+    # Less their commands' starts the wells start at 30.0, 28.9 and 34.9 s. B and C are more
+    # than 0.675 s (0.45 of sip plus up) from the median, 30.0 s.
+    self.assertEqual(result.verdict, "needs_review")
+    self.assertEqual(result.flagged_wells, ())
+    self.assertEqual(result.inconsistent_wells, ("B", "C"))
+    self.assertEqual(result.message, "2 of 3 wells failed a check: B (timing), C (timing)")
 
   def bridged(self, run: PlateRun, well: str, per_tick: int) -> Tuple[array.array, int]:
     """Return the run's events with the air gap after a well filled in, and the fill's size."""
@@ -744,6 +881,22 @@ class DistortedPeakTests(unittest.TestCase):
     for name in names[48:]:
       first, last = run.ranges[name] or (0, 0)
       self.assertEqual(found[name], (first + fill, last + fill))
+
+  def test_two_wells_merged_flat_fail_the_checks(self) -> None:
+    """The well that took both and the wells that slipped are named."""
+    # D07's peak is 3.5 sips wide; D08 to D11 each start one well, 2.5 s, late.
+    run = PlateRun()
+    times, _ = self.bridged(run, "D07", per_tick=2)
+    result = run.identify(times)
+    self.assertEqual(result.inconsistent_wells, ("D07", "D08", "D09", "D10", "D11"))
+    self.assertEqual(result.wells[42].failed_checks, ("width",))
+    self.assertEqual(result.wells[43].failed_checks, ("timing",))
+    self.assertEqual(
+      result.message,
+      "1 of 96 wells were placed by timing because no peak was found for them: D12; "
+      "5 of 96 wells failed a check: D07 (width), D08 (timing), D09 (timing), D10 (timing), "
+      "D11 (timing)",
+    )
 
 
 class ClockTests(unittest.TestCase):
@@ -808,6 +961,169 @@ class NoiseTests(unittest.TestCase):
     self.assertGreaterEqual(in_wells, 96 * 400)
     self.assertLess(in_wells, 96 * 400 + 96 * 5)
     self.assertEqual([well.event_count >= 400 for well in result.wells], [True] * 96)
+
+
+def wrong_ranges(result: wid.WellIdentification, run: PlateRun) -> List[str]:
+  """Return the wells whose event range is not the one the read gave them."""
+  return [well.well for well in result.wells if well.event_range != run.ranges[well.well]]
+
+
+def row_wells(row: str, columns: Sequence[int]) -> List[str]:
+  """Return the names of some wells of one row of a 96-well plate."""
+  return [f"{row}{column:02d}" for column in columns]
+
+
+class WrongAssignmentTests(unittest.TestCase):
+  """Reads matched wrongly, and the wells the checks name."""
+
+  def test_an_empty_and_a_split_well_paired_in_order(self) -> None:
+    """One peak per well, from an empty well and a split one, fails the timing check."""
+    # C05 is empty and D07 split into two peaks, so there are as many peaks as wells and they
+    # are paired in order: from C05 on every well takes the next well's peak, until D06 takes
+    # the first piece of D07 and D07 the second. Nothing is flagged.
+    run = PlateRun(empty=("C05",), keep_tick={"D07": lambda tick: not 60 <= tick < 100})
+    with self.assertLogs(wid.logger, "WARNING"):
+      result = run.identify()
+    self.assertEqual(result.flagged_wells, ())
+    self.assertEqual(
+      wrong_ranges(result, run), row_wells("C", range(5, 13)) + row_wells("D", range(1, 8))
+    )
+    # The median sides with the majority of a run. Most of row C is a well late, so the four
+    # wells before C05 are named, and C12, which took D01's peak after the shake. Row D is
+    # split about evenly, its median lies between the two, and every well of it is named.
+    self.assertEqual(result.verdict, "needs_review")
+    self.assertEqual(
+      result.inconsistent_wells,
+      tuple(row_wells("C", [1, 2, 3, 4, 12]) + row_wells("D", range(1, 13))),
+    )
+    # D06's piece of D07 is 0.3 sips wide.
+    self.assertEqual(result.wells[41].failed_checks, ("timing", "width"))
+
+  def test_an_empty_well_and_noise_paired_in_order(self) -> None:
+    """One peak per well, from an empty well and a burst of noise, fails the timing check."""
+    # C05 is empty and 0.3 s of noise follows E03: from C05 on every well takes the next
+    # well's peak, until E03 takes the noise.
+    run = PlateRun(empty=("C05",))
+    start = run.sip_starts["E03"] + run.sip + 0.6
+    noise = [start + tick * TICK for tick in range(60) for _ in range(2)]
+    result = run.identify(array.array("f", sorted(list(run.times) + noise)))
+    self.assertEqual(result.flagged_wells, ())
+    found = found_ranges(result)
+    self.assertEqual(found["C05"], run.ranges["C06"])
+    self.assertEqual(found["E02"], run.ranges["E03"])
+    first, last = run.ranges["E04"] or (0, 0)
+    self.assertEqual(found["E04"], (first + len(noise), last + len(noise)))
+    # Row D is all a well late and keeps its spacing; only D12, which took E01's peak after the
+    # shake, is named. E03's noise is 0.3 sips wide.
+    self.assertEqual(result.verdict, "needs_review")
+    self.assertEqual(
+      result.inconsistent_wells,
+      tuple(row_wells("C", [1, 2, 3, 4, 12]) + ["D12"] + row_wells("E", [1, 2, 3])),
+    )
+    self.assertEqual(result.wells[50].failed_checks, ("timing", "width"))
+
+  def test_an_empty_well_where_the_search_reaches_the_next_well(self) -> None:
+    """With short up and move times an empty well takes its neighbour's peak."""
+    # Sip 0.5 s, up 0.2 s, move 0.3 s: B09 is looked for over its 0.8 s and 0.5 s either side,
+    # which reaches B10's peak. B09 to B11 each take the next well's peak and B12 is flagged.
+    run = PlateRun(sip=0.5, up=0.2, move=0.3, empty=("B09",))
+    result = run.identify()
+    self.assertEqual(wrong_ranges(result, run), row_wells("B", range(9, 13)))
+    self.assertEqual(result.flagged_wells, ("B12",))
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("B", [9, 10, 11])))
+    # With B05 empty most of row B slips, and the median names the four wells still in place.
+    run = PlateRun(sip=0.5, up=0.2, move=0.3, empty=("B05",))
+    result = run.identify()
+    self.assertEqual(wrong_ranges(result, run), row_wells("B", range(5, 13)))
+    self.assertEqual(result.flagged_wells, ("B12",))
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("B", [1, 2, 3, 4])))
+
+  def test_a_whole_run_one_well_late_keeps_its_spacing(self) -> None:
+    """A run that is all one well off passes the checks; only its last well is flagged."""
+    # A run's offset is set anew after every pause, so a run one well late cannot be told
+    # from one after a longer pause whose last well is empty.
+    run = PlateRun(empty=("F01",))
+    result = run.identify()
+    self.assertEqual(wrong_ranges(result, run), row_wells("F", range(1, 13)))
+    self.assertEqual((result.flagged_wells, result.inconsistent_wells), (("F12",), ()))
+    # With A01 empty every run is one well late.
+    result = PlateRun(empty=("A01",)).identify()
+    self.assertEqual(result.inconsistent_wells, ())
+    self.assertEqual(result.verdict, "needs_review")
+
+
+class FalseAlarmTests(unittest.TestCase):
+  """Reads matched correctly pass the checks."""
+
+  def assert_passes(self, run: PlateRun, flagged: Sequence[str] = ()) -> wid.WellIdentification:
+    """Check that every well has its own events, the given ones are flagged and none fails."""
+    result = run.identify()
+    self.assertEqual(misplaced_wells(result, run), [])
+    self.assertEqual(result.flagged_wells, tuple(flagged))
+    self.assertEqual(result.inconsistent_wells, (), result.message)
+    return result
+
+  def test_clean_reads(self) -> None:
+    """Clean 96- and 384-well reads pass."""
+    for run in (PlateRun(), PlateRun(rows=16, columns=24, sip=0.5, up=0.4, move=0.6, pause=3.0)):
+      self.assertEqual(self.assert_passes(run).verdict, "identified")
+
+  def test_drift_and_pauses_of_other_lengths(self) -> None:
+    """A clock running fast or slow and pauses longer or shorter than timed pass."""
+    plate_384 = PlateRun(
+      rows=16, columns=24, sip=0.5, up=0.4, move=0.6, pause=3.0, clock_rate=1.004, pause_extra=3.0
+    )
+    cases: List[Tuple[PlateRun, Tuple[str, ...]]] = [
+      (PlateRun(clock_rate=1.004, pause_extra=0.8), ()),
+      (PlateRun(clock_rate=0.996, pause_extra=3.0), ()),
+      (PlateRun(pause_extra=-1.2), ()),
+      (plate_384, ()),
+      (PlateRun(empty=("B03",), clock_rate=1.004, pause_extra=0.8), ("B03",)),
+      (PlateRun(empty=("B03", "G10"), clock_rate=0.996, pause_extra=3.0), ("B03", "G10")),
+    ]
+    for index, (run, flagged) in enumerate(cases):
+      with self.subTest(case=index):
+        self.assert_passes(run, flagged)
+
+  def test_realistic_jitter(self) -> None:
+    """Wells arriving with 50 ms of jitter, with Poisson counts, pass.
+
+    Assumed: each well's sample reaches the detector with an error of 50 ms (standard
+    deviation) against its sampling command, from the sampler's motion, the stamping of its
+    commands and the pulsing of the pump together; events per 5 ms tick are Poisson.
+    """
+    rng = random.Random(20261111)
+    for run in (
+      PlateRun(rng=rng, jitter=0.05),
+      PlateRun(rows=16, columns=24, sip=0.5, up=0.4, move=0.6, pause=3.0, rng=rng, jitter=0.05),
+    ):
+      self.assertEqual(self.assert_passes(run).verdict, "identified")
+
+  def test_correctly_flagged_empty_wells(self) -> None:
+    """Empty wells that are flagged leave the checks of their neighbours alone."""
+    cases: List[Tuple[str, ...]] = [
+      ("C05",),
+      ("C05", "C06"),
+      ("A12",),
+      ("H12",),
+      ("B01", "B02"),
+      tuple(row_wells("D", range(1, 13))),
+      tuple(row_wells("G", range(1, 13)) + row_wells("H", range(1, 13))),
+    ]
+    for empty in cases:
+      with self.subTest(empty=empty):
+        result = self.assert_passes(PlateRun(empty=empty), empty)
+        self.assertNotIn("failed a check", result.message)
+    run = PlateRun(rows=16, columns=24, sip=0.5, up=0.4, move=0.6, pause=3.0, empty=("B03", "K17"))
+    self.assert_passes(run, ("B03", "K17"))
+
+  def test_random_clean_reads(self) -> None:
+    """No well of 50 random clean reads fails a check."""
+    rng = random.Random(1103)
+    for index in range(50):
+      run = random_clean_run(rng)
+      with self.subTest(read=index, sip=run.sip, up=run.up):
+        self.assertEqual(self.assert_passes(run).verdict, "identified")
 
 
 class FailureTests(unittest.TestCase):
