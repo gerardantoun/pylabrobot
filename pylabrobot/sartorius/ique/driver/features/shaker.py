@@ -2,9 +2,10 @@
 
 Speeds are rpm; the controller would clamp a speed outside the shaker's range, the driver
 refuses it. Shaking needs the probe out of the plate: at or above the travel height, or away
-from the plate area. The plate lock is closed before shaking starts. The lock may only change
-while the shaker stands still, and an open lock closes itself after five minutes and faults the
-shaker.
+from the plate area. So do homing the shaker and moving the plate lock, which move the plate,
+unless the plate rail is out. The plate lock is closed before shaking starts. The lock may only
+change while the shaker stands still, and an open lock closes itself after five minutes and
+faults the shaker.
 """
 
 from __future__ import annotations
@@ -97,6 +98,19 @@ class Shaker:
     await driver.confirm_operation("stop the shaker", "Shaker")
     logger.info("shaker stopped")
 
+  async def _require_probe_clear(self, action: str) -> None:
+    """Raise if the plate may move under the probe: the rail is not known to be out and the
+    probe is low over the plate area.
+
+    Raises:
+      UnsafeMotionError: The probe is low over the plate area.
+      CalibrationMissingError: The rail is not out and no calibration gives the travel height
+        and plate area.
+    """
+    driver = self._driver
+    if driver.rail_position != "ejected":
+      await driver.sampler.require_clear_of_plate(action)
+
   async def home(self) -> None:
     """Close the plate lock and move the shaker to its home position.
 
@@ -104,9 +118,11 @@ class Shaker:
       WorklistActiveError: A worklist runs.
       DeviceFaultedError: A mechanical device is faulted, or the shaker faulted.
       DeviceNotReadyError: The shaker is not ready (it is when it stands still).
+      UnsafeMotionError: The probe is low over the plate area.
     """
     driver = self._driver
     await driver.require_direct_operation("home the shaker", "Shaker")
+    await self._require_probe_clear("home the shaker")
     await driver.call(driver.client.shaker_home)
     await driver.confirm_operation("home the shaker", "Shaker")
     self.lock_closed = True
@@ -118,9 +134,11 @@ class Shaker:
       WorklistActiveError: A worklist runs.
       DeviceFaultedError: A mechanical device is faulted, or the lock did not close.
       DeviceNotReadyError: The shaker is not ready.
+      UnsafeMotionError: The probe is low over the plate area.
     """
     driver = self._driver
     await driver.require_direct_operation("close the plate lock", "Shaker")
+    await self._require_probe_clear("close the plate lock")
     await driver.call(driver.client.shaker_close_plate_lock)
     await driver.confirm_operation("close the plate lock", "Shaker")
     self.lock_closed = True
@@ -132,9 +150,11 @@ class Shaker:
       WorklistActiveError: A worklist runs.
       DeviceFaultedError: A mechanical device is faulted, or the lock did not open.
       DeviceNotReadyError: The shaker is not ready.
+      UnsafeMotionError: The probe is low over the plate area.
     """
     driver = self._driver
     await driver.require_direct_operation("open the plate lock", "Shaker")
+    await self._require_probe_clear("open the plate lock")
     await driver.call(driver.client.shaker_open_plate_lock)
     await driver.confirm_operation("open the plate lock", "Shaker")
     self.lock_closed = False

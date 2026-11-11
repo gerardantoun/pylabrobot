@@ -1,5 +1,6 @@
 """Tests of the sampler feature on the simulated controller, and of its geometry helpers."""
 
+import dataclasses
 import datetime
 import decimal
 import unittest
@@ -14,8 +15,11 @@ from pylabrobot.sartorius.ique.driver.errors import (
   UnsafeMotionError,
 )
 from pylabrobot.sartorius.ique.driver.features.sampler import (
+  DECK_CLEARANCE,
   PLATE_AREA_MARGIN,
   PlateArea,
+  highest_sampling_z,
+  lowest_plain_z,
   plate_area,
   segment_meets_area,
 )
@@ -41,8 +45,26 @@ class GeometryTests(unittest.TestCase):
     self.assertAlmostEqual(area.y_min, 42.7 - PLATE_AREA_MARGIN)
     self.assertAlmostEqual(area.y_max, 112.8 + PLATE_AREA_MARGIN)
     self.assertTrue(area.contains(50.0, 80.0))
+    # The plate's skirt and the holder: the deck-height test point lies on the holder.
+    self.assertTrue(area.contains(3.0, 105.0))
     self.assertFalse(area.contains(131.0, 195.0))
-    self.assertFalse(area.contains(3.0, 105.0))
+    self.assertFalse(area.contains(27.25, 1.5))
+    self.assertFalse(area.contains(0.0, 13.5))
+
+  def test_floors_of_a_plain_z_move(self) -> None:
+    """Over the plate the highest sampling height, near a station its dip, else above the deck.
+
+    The simulated calibration maps every model 3.5 mm above the deck (200 mm); sampled 0.5 mm
+    above that for 96 and 1536 wells. Buffer dips 8 mm above the deck, Decon 6 mm.
+    """
+    calibration = simulated_calibration()
+    self.assertEqual(highest_sampling_z(calibration), 204.0)
+    self.assertEqual(lowest_plain_z(calibration, 50.0, 80.0), 204.0)
+    self.assertEqual(lowest_plain_z(calibration, 27.25 + 9.0, 1.5 + 9.0), 208.0)
+    self.assertEqual(lowest_plain_z(calibration, 75.75, 1.5), 206.0)
+    self.assertEqual(lowest_plain_z(calibration, 131.0, 195.0), 200.0 + DECK_CLEARANCE)
+    unmapped = dataclasses.replace(calibration, plate_models=())
+    self.assertEqual(highest_sampling_z(unmapped), 200.0 + DECK_CLEARANCE)
 
   def test_paths(self) -> None:
     """A path touches the area when any point of it does."""
@@ -93,8 +115,11 @@ class SamplerTests(unittest.IsolatedAsyncioTestCase):
       await self.sampler.move_xy(50.0, 80.0)
     with self.assertRaises(UnsafeMotionError):
       await self.sampler.move_xy(5.0, 5.0)
+    # The plate area reaches across the whole X travel: the front is reached only over it.
+    with self.assertRaises(UnsafeMotionError):
+      await self.sampler.move_xy(130.0, 5.0)
     self.assertNotIn("sampler_move_xy", self.names())
-    await self.sampler.move_xy(130.0, 5.0)
+    await self.sampler.move_xy(100.0, 150.0)
     await self.sampler.home()
     await self.driver.plate_rail.load()
     await self.sampler.move_xy(50.0, 80.0, fast=True)
@@ -111,6 +136,66 @@ class SamplerTests(unittest.IsolatedAsyncioTestCase):
     with self.assertRaises(UnsafeMotionError):
       await self.sampler.move_z(220.0)
     self.assertNotIn("sampler_move_z", self.names())
+
+  async def test_plain_moves_stop_above_the_floor(self) -> None:
+    """A plain Z move is refused below the floor at the probe's XY, and allowed down to it."""
+    await self.driver.plate_rail.load()
+    await self.sampler.move_xy(50.0, 80.0)
+    self.controller.calls.clear()
+    for z in (190.0, 203.0):
+      with self.assertRaises(UnsafeMotionError) as caught:
+        await self.sampler.move_z(z)
+      self.assertIn("find_z_contact", str(caught.exception))
+    self.assertNotIn("sampler_move_z", self.names())
+    await self.sampler.move_z(204.0)
+    self.assertEqual(self.controller.probe_position[2], 204.0)
+    await self.sampler.move_z(250.0)
+    await self.sampler.move_xy(131.0, 195.0)
+    with self.assertRaises(UnsafeMotionError):
+      await self.sampler.move_z(200.0 + DECK_CLEARANCE - 1.0)
+    await self.sampler.move_z(200.0 + DECK_CLEARANCE)
+    self.assertEqual(self.controller.collisions, [])
+
+  async def test_no_descent_into_a_shaking_plate(self) -> None:
+    """With the shaker shaking and the rail not out, the probe is neither lowered nor searched
+    down; raising stays allowed."""
+    await self.driver.plate_rail.load()
+    await self.sampler.move_xy(50.0, 80.0)
+    await self.driver.shaker.start(2000)
+    self.controller.calls.clear()
+    with self.assertRaises(UnsafeMotionError) as caught:
+      await self.sampler.move_z(204.0)
+    self.assertIn("shaker", str(caught.exception))
+    with self.assertRaises(UnsafeMotionError):
+      await self.sampler.find_z_contact(250.0, 200.0)
+    self.assertFalse({"sampler_move_z", "sampler_find_z_contact"} & set(self.names()))
+    await self.driver.shaker.stop()
+    await self.sampler.move_z(204.0)
+    await self.sampler.move_z(250.0)
+
+  async def test_a_z_move_returns_once_the_probe_is_there(self) -> None:
+    """The controller's Z move returns before the probe arrives; the feature waits for it."""
+    await self.driver.call(self.controller.sampler_move_z, decimal.Decimal("210"))
+    self.assertGreater(self.controller.probe_position[2], 210.0)
+    await self.sampler.move_z(250.0)
+    await self.sampler.move_z(220.0)
+    self.assertEqual(self.controller.probe_position[2], 220.0)
+
+  async def test_raise_clear_of_contact(self) -> None:
+    """The probe is raised to the top; contact that does not clear is reported."""
+    await self.driver.plate_rail.load()
+    await self.sampler.move_xy(3.0, 105.0)
+    await self.sampler.find_z_contact(250.0, 195.0, retract_after_find=False)
+    self.assertTrue(await self.sampler.has_contact())
+    await self.sampler.raise_clear_of_contact("park")
+    self.assertEqual(self.controller.probe_position[2], 250.0)
+    self.assertFalse(await self.sampler.has_contact())
+    self.controller.set_contact(True)
+    self.sampler.contact_clear_timeout = 0.05
+    with self.assertRaises(UnsafeMotionError) as caught:
+      await self.sampler.raise_clear_of_contact("park")
+    self.assertIn("still reports contact", str(caught.exception))
+    self.controller.set_contact(None)
 
   async def test_contact(self) -> None:
     """With contact, lowering, XY moves and parking are refused; raising is allowed."""

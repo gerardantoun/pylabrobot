@@ -236,7 +236,27 @@ class WorklistTimeoutError(WorklistFailedError, TimeoutError):
 
 class EventDataError(IQueError):
   """The event data of a run is missing or inconsistent: absent FCS file, wrong checksum,
-  unexpected parameters, or fewer events in the file than were streamed."""
+  unexpected parameters, or fewer events in the file than were streamed.
+
+  Attributes:
+    run: What the run produced, without parsed events: the completed worklist, the stream
+      counts and, as ``fcs_file``, the bytes downloaded; None when the error concerns no run.
+    data: The bytes of the controller's FCS file as downloaded, or None when there were none.
+  """
+
+  def __init__(
+    self, message: str, run: Optional[CompletedRun] = None, data: Optional[bytes] = None
+  ) -> None:
+    """Create the error.
+
+    Args:
+      message: What is wrong with the data.
+      run: What the run produced.
+      data: The bytes downloaded.
+    """
+    super().__init__(message)
+    self.run = run
+    self.data = data
 
 
 class WellIdentificationFailedError(IQueError):

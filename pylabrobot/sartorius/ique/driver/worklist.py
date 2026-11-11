@@ -185,9 +185,17 @@ DEFAULT_SHAKE_SPEEDS: Dict[str, Dict[PlateFormat, int]] = {
 # Between wells and in stations the probe stays up at least this long per dip, in seconds, so
 # that each dip is followed by an air gap.
 MIN_STATION_UP_TIME = 0.5
+# The probe stays up at least this long after every well, in seconds. The controller's Z move
+# returns before the probe arrives, and the flush that follows the last well moves the plate
+# rail out at once; the probe needs this time to rise out of the well first. The limit holds
+# until the timing of the Z axis against the plate rail has been measured on an instrument.
+MIN_UP_TIME = 0.5
 # Settings ranges, in the units of the settings.
 SIP_TIME_RANGE = (0.5, 59.9)
-UP_TIME_RANGE = (0.0, 59.9)
+UP_TIME_RANGE = (MIN_UP_TIME, 59.9)
+# A measured transit delay, from the start of a well's sampling command to its first events at
+# the detector, in seconds.
+TRANSIT_DELAY_RANGE = (1.0, 600.0)
 PRIME_DURATION_RANGE = (5.0, 600.0)
 PRE_PLATE_SHAKE_DURATION_RANGE = (1.0, 180.0)
 SHAKE_DURATION_RANGE = (1.0, 180.0)
@@ -659,8 +667,9 @@ class PlateReadSettings(AcquisitionSettings):
 
   Attributes:
     sip_time: How long the probe stays down in each well, 0.5 to 59.9 s.
-    up_time: How long it then waits up, drawing the air gap that separates wells, 0 to 59.9 s.
-      In stations it waits at least 0.5 s.
+    up_time: How long it then waits up, drawing the air gap that separates wells, 0.5 to
+      59.9 s. The probe needs at least 0.5 s to rise out of a well before the plate rail may
+      move, which it does right after the last well.
     pump_speed: Pump speed while sampling, 10 to 32 rpm; 19 rpm is the instrument's "slow".
     sampling_height: How far above the mapped well bottom the probe samples; None for the
       default of the plate format (0.5 mm for 96 and 1536 wells, 0.2 mm for 384).
@@ -688,6 +697,14 @@ class PlateReadSettings(AcquisitionSettings):
       150 s at 10.
     post_plate_clean: Whether to clean the probe after the flush.
     cleans: The clean steps, in order, each 5 to 600 s in whole seconds.
+    transit_delay: The measured time from the start of a well's sampling command to the first
+      events of that well at the detector, 1 to 600 s, for this instrument and pump speed;
+      None when it has not been measured. Given, well identification places the first well
+      where this time predicts it instead of on the first burst of events, so that sample left
+      in the line or an empty first well cannot shift the wells. Measure it on a plate read
+      as the start of the first well's events less the start of its sampling command, both
+      counted from the start of recording (``PlateRead.acquisition_start`` gives that start on
+      the command clock).
   """
 
   sip_time: float = 1.0
@@ -710,6 +727,7 @@ class PlateReadSettings(AcquisitionSettings):
   flush_duration: float = 30.0
   post_plate_clean: bool = True
   cleans: Tuple[RinseStep, ...] = DEFAULT_CLEANS
+  transit_delay: Optional[float] = None
 
   def __post_init__(self) -> None:
     """Check every setting against its range and the settings against each other.
@@ -760,6 +778,8 @@ class PlateReadSettings(AcquisitionSettings):
     _check_steps(self.cleans, CLEAN_DURATION_RANGE, False, "cleans")
     if self.post_plate_clean and not self.cleans:
       raise ValueError("post_plate_clean is on but cleans is empty")
+    if self.transit_delay is not None:
+      _check_range(self.transit_delay, TRANSIT_DELAY_RANGE, "transit_delay", "s")
     cleaning = sum(step.duration for step in self.cleans) if self.post_plate_clean else 0.0
     needed = _minimum_flush_and_clean(self.pump_speed)
     if self.flush_duration < max(FLUSH_DURATION_RANGE[0], needed - cleaning):
@@ -1397,6 +1417,8 @@ def _new_worklist(
   leave_fluidics_running: bool = False,
   experiment_id: Optional[uuid.UUID] = None,
   plate_id: Optional[uuid.UUID] = None,
+  experiment_name: Optional[str] = None,
+  plate_number: Optional[str] = None,
 ) -> Worklist:
   """Return a worklist ready to run: the controller fills in every result member.
 
@@ -1409,6 +1431,8 @@ def _new_worklist(
     leave_fluidics_running: Whether the fluidics stay on after the last command.
     experiment_id: When set, finalizing the run archives its files on the instrument.
     plate_id: When set, the controller homes the shaker, which also locks the plate, first.
+    experiment_name: Text the controller stores with the worklist and returns unchanged.
+    plate_number: Text the controller stores with the worklist and returns unchanged.
   """
   device_id = None if calibration is None else calibration.instrument.device_id
   worklist = Worklist(
@@ -1421,7 +1445,7 @@ def _new_worklist(
     error=None,
     execution_notes=None,
     experiment_id=experiment_id,
-    experiment_name=None,
+    experiment_name=experiment_name,
     fcs_data_written=0,
     fcs_file_crc=0,
     fcs_file_name=None,
@@ -1430,7 +1454,7 @@ def _new_worklist(
     leave_fluidics_running_on_complete=leave_fluidics_running,
     name=name,
     plate_id=plate_id,
-    plate_number=None,
+    plate_number=plate_number,
     pump_run_time_minutes=decimal.Decimal(0),
     start_time=NOT_RUN,
     stop_reason="Unspecified",
@@ -1587,6 +1611,9 @@ def plate_read_worklist(
   11. the clean steps, when ``post_plate_clean``;
   12. stop the pump and the fluidics.
 
+  The worklist carries the plate model as its experiment name and the plate format as its plate
+  number; the controller returns both unchanged, so a read can be rebuilt from its record.
+
   Args:
     calibration: The instrument's calibration.
     plate_format: The plate's format.
@@ -1606,7 +1633,8 @@ def plate_read_worklist(
 
   Raises:
     ValueError: If a well is not on the plate or given twice, no well is given, the name is one
-      the controller treats specially, or a setting does not suit the instrument or the plate.
+      the controller treats specially, a setting does not suit the instrument or the plate, or
+      a well would be sampled below the deck height.
     CalibrationError: If the calibration lacks something the read needs: the plate format's
       corners, the plate model or its depth, the deck height and its test point, the travel
       height, or a station.
@@ -1668,12 +1696,18 @@ def plate_read_worklist(
       )
     )
   shake_seconds = _whole_seconds(settings.shake_duration, "shake_duration")
+  deck = _position(calibration.instrument.deck_height, "Z", "deck height")
   for count, (row, column) in enumerate(positions, start=1):
     what = f"well {format_well_name(row, column)}"
     xy = well_sampling_xy(calibration, plate_format, plate_model, row, column)
     z = well_sampling_z(calibration, plate_format, plate_model, row, column, sampling_height)
     x, y = _position(xy.x, "X", what), _position(xy.y, "Y", what)
     depth = _position(z, "Z", what)
+    if depth < deck:
+      raise ValueError(
+        f"{what}: the sampling height {depth} mm of plate model {plate_model!r} is below the "
+        f"deck height {deck} mm; the plate model's depth is wrong"
+      )
     commands.append(_sample_well(row, column, x, y, depth, travel, sip, up, prior))
     prior = (x, y)
     if count == len(positions):
@@ -1712,6 +1746,8 @@ def plate_read_worklist(
     calibration,
     experiment_id=uuid.uuid4(),
     plate_id=uuid.uuid4(),
+    experiment_name=plate_model,
+    plate_number=plate_format,
   )
 
 
@@ -2118,7 +2154,8 @@ def _detector_clean(method: CleanMethod, name: str) -> Worklist:
   """Build a worklist that runs one of the cytometer's own maintenance routines.
 
   The cytometer runs the routine by itself; cancelling the worklist only stops waiting for it.
-  The fluidics are left running afterwards, as the routine leaves them.
+  The cytometer returns to standby by itself at the end of the routine, so the worklist does
+  not stop the fluidics afterwards.
   """
   estimate = _CLEAN_ESTIMATES[method]
   minutes = (estimate / 60).normalize()
@@ -2133,7 +2170,8 @@ def detector_quick_clean_worklist() -> Worklist:
   """Build the detector quick clean, about 11 minutes. The sampler tubing must be installed.
 
   Returns:
-    The worklist, ready to run once the controller reports the cytometer ready to run.
+    The worklist, ready to run once the controller reports the cytometer ready for fluidics
+    maintenance.
   """
   return _detector_clean("QuickClean", "Detector Quick Clean")
 
@@ -2142,7 +2180,8 @@ def detector_long_clean_worklist() -> Worklist:
   """Build the detector long clean, about 30 minutes. The sampler tubing must be installed.
 
   Returns:
-    The worklist, ready to run once the controller reports the cytometer ready to run.
+    The worklist, ready to run once the controller reports the cytometer ready for fluidics
+    maintenance.
   """
   return _detector_clean("LongClean", "Detector Long Clean")
 
@@ -2153,7 +2192,8 @@ def detector_unclog_worklist() -> Worklist:
   The sampler tubing must be installed.
 
   Returns:
-    The worklist, ready to run once the controller reports the cytometer ready to run.
+    The worklist, ready to run once the controller reports the cytometer ready for fluidics
+    maintenance.
   """
   return _detector_clean("Unclog", "Detector Unclog")
 
@@ -2164,7 +2204,8 @@ def detector_debubble_worklist() -> Worklist:
   It also ends the fluidics maintenance procedure. The sampler tubing must be installed.
 
   Returns:
-    The worklist, ready to run once the controller reports the cytometer ready to run.
+    The worklist, ready to run once the controller reports the cytometer ready for fluidics
+    maintenance.
   """
   return _detector_clean("Priming", "Detector Debubble")
 
@@ -2366,30 +2407,125 @@ def estimated_duration(worklist: Worklist) -> datetime.timedelta:
   return total
 
 
+# The commands that flush the sample line: the flush of a plate read, which also ejects the
+# plate, and the flush of a tube read, with the probe down in a station.
+_FLUSHES = (FlushMatryoshkaCommand, FlushCommand, TimedContinuousRinseCommand)
+
+
 def flush_target(
   worklist: Worklist, *, running: Optional[uuid.UUID] = None
 ) -> Optional[WorklistCommand]:
-  """Return the command to skip to when a plate read is stopped early, so the line is flushed.
+  """Return the command to skip to when a read is stopped early, so the line is flushed.
 
   It is the first command not yet completed that stops a continuous shake or flushes the line:
   skipping to it runs it and everything after it (flush, clean, pump and fluidics off). Skip
-  only once recording has started; before that, cancel. A skip does not interrupt the command
-  running, and the commands after a skip target that already runs would all be skipped, so
-  there is no target while that command runs.
+  only once recording has started; before that, cancel.
+
+  A skip does not interrupt the command running, and when the target has started by the time
+  the skip reaches the controller, every command after it is skipped: the cleans, and stopping
+  the pump and the fluidics. So there is no target while the target runs, nor while the command
+  just before it runs: the read reaches the target on its own, and a skip could only arrive
+  late.
 
   Args:
     worklist: The worklist as last reported by the controller.
     running: The ID of the command running now, if any.
 
   Returns:
-    The command, or None when the worklist has none left to skip to.
+    The command, or None when there is nothing to skip to.
 
   Raises:
     ValueError: If the worklist has no commands or one is missing.
   """
-  for command in _commands(worklist):
-    if isinstance(command, (StopShakerCommand, FlushMatryoshkaCommand, FlushCommand)):
+  commands = _commands(worklist)
+  for index, command in enumerate(commands):
+    if isinstance(command, (StopShakerCommand,) + _FLUSHES):
       if command.completed:
         continue
-      return None if command.id == running else command
+      if command.id == running or (index > 0 and commands[index - 1].id == running):
+        return None
+      return command
+  return None
+
+
+def _recording_started(worklist: Worklist) -> bool:
+  """Return whether a worklist's acquisition command completed."""
+  return any(
+    isinstance(command, FlowCytometerAcquireCommand) and command.completed
+    for command in worklist.commands or []
+  )
+
+
+def sample_left_in_line(worklist: Worklist) -> bool:
+  """Return whether a read ended with sample in the line: after recording started and before
+  its flush completed.
+
+  The flush is the first command that flushes the line (the plate read's flush, or the tube
+  read's flush in a station); a read without one leaves its sample whenever it recorded.
+
+  Args:
+    worklist: The worklist as the controller reported it at its end.
+  """
+  if not _recording_started(worklist):
+    return False
+  for command in worklist.commands or []:
+    if isinstance(command, _FLUSHES):
+      return not command.completed
+  return True
+
+
+def line_flushed(worklist: Worklist) -> bool:
+  """Return whether a worklist flushed the sample line: its first flush, or for a worklist
+  without one its last command, completed.
+
+  Args:
+    worklist: The worklist as the controller reported it at its end.
+  """
+  commands = [command for command in worklist.commands or [] if command is not None]
+  for command in commands:
+    if isinstance(command, _FLUSHES):
+      return command.completed
+  return bool(commands) and commands[-1].completed
+
+
+def cleaning_skipped(worklist: Worklist) -> bool:
+  """Return whether a read's flush completed but commands after it were skipped.
+
+  That happens when a skip to the flush reaches the controller after the flush started: the
+  controller then skips everything after it, the probe cleans among them.
+
+  Args:
+    worklist: The worklist as the controller reported it at its end.
+  """
+  commands = [command for command in worklist.commands or [] if command is not None]
+  for index, command in enumerate(commands):
+    if isinstance(command, _FLUSHES):
+      if not command.completed:
+        return False
+      return any(later.execution_notes == "Skipped" for later in commands[index + 1 :])
+  return False
+
+
+def acquisition_start(completed: Worklist) -> Optional[float]:
+  """Return when recording started, in seconds since the first command of the worklist
+  started, on the controller's clock: the clock of :func:`sampled_wells`.
+
+  It is the start of the acquisition command; the detector starts recording during that
+  command, within about a second.
+
+  Args:
+    completed: The worklist as the controller handed it back.
+
+  Returns:
+    The time, or None when the worklist did not start recording.
+
+  Raises:
+    ValueError: If the worklist has no commands or one is missing.
+  """
+  commands = _commands(completed)
+  if not _has_started(commands[0]):
+    return None
+  for command in commands:
+    if isinstance(command, FlowCytometerAcquireCommand) and _has_started(command):
+      return (command.start_time - commands[0].start_time).total_seconds()
   return None

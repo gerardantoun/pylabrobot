@@ -950,6 +950,62 @@ class WriteTests(unittest.TestCase):
         cal.write_calibration(example())
 
 
+class PatchDeckHeightTests(unittest.TestCase):
+  """Changing the deck height of an instrument's file in place."""
+
+  def test_only_the_deck_height_and_its_date_change(self) -> None:
+    """Every other byte of the document stays; the stations' depths, also named ZLow, too."""
+    original = EXAMPLE
+    data = archive(original)
+    measured_on = datetime.datetime(2026, 11, 11, 10, 30, tzinfo=CEST)
+    patched = cal.patch_deck_height(data, 201.55, measured_on)
+    expected = original.replace("<ZLow>201.350</ZLow>", "<ZLow>201.550</ZLow>").replace(
+      "<ZLowLastCalibratedOn>2021-06-01T14:03:27</ZLowLastCalibratedOn>",
+      "<ZLowLastCalibratedOn>2026-11-11T10:30:00+02:00</ZLowLastCalibratedOn>",
+    )
+    self.assertEqual(document_of(patched), expected.encode("utf-8-sig"))
+    read = cal.read_calibration(patched)
+    self.assertEqual(read.instrument.deck_height, 201.55)
+    self.assertEqual(read.instrument.deck_height_calibrated_on, measured_on)
+    self.assertEqual(read.stations, example().stations)
+    self.assertEqual(read.plate_models, example().plate_models)
+
+  def test_a_nil_date_and_other_entries(self) -> None:
+    """A deck height without a date gets one; other entries of the archive keep their bytes;
+    a document without a byte-order mark keeps none."""
+    document = EXAMPLE.replace(
+      "<ZLowLastCalibratedOn>2021-06-01T14:03:27</ZLowLastCalibratedOn>",
+      '<ZLowLastCalibratedOn xsi:nil="true" />',
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zipped:
+      zipped.writestr("Calibration.xml", document.encode("utf-8"))
+      zipped.writestr("Notes.txt", b"kept as it is")
+    measured_on = datetime.datetime(2026, 11, 11, 10, 30, tzinfo=datetime.timezone.utc)
+    patched = cal.patch_deck_height(buffer.getvalue(), 200.0, measured_on)
+    self.assertEqual(
+      document_of(patched),
+      document.replace("<ZLow>201.350</ZLow>", "<ZLow>200.000</ZLow>")
+      .replace(
+        '<ZLowLastCalibratedOn xsi:nil="true" />',
+        "<ZLowLastCalibratedOn>2026-11-11T10:30:00Z</ZLowLastCalibratedOn>",
+      )
+      .encode("utf-8"),
+    )
+    with zipfile.ZipFile(io.BytesIO(patched)) as zipped:
+      self.assertEqual(zipped.read("Notes.txt"), b"kept as it is")
+    self.assertEqual(cal.read_calibration(patched).instrument.deck_height, 200.0)
+
+  def test_refusals(self) -> None:
+    """Only a current-version file with one deck height in its instrument record is patched."""
+    now = datetime.datetime(2026, 11, 11, tzinfo=datetime.timezone.utc)
+    with self.assertRaises(cal.CalibrationFormatError):
+      cal.patch_deck_height(b"junk", 200.0, now)
+    with self.assertLogs(cal.logger, "WARNING"):
+      with self.assertRaisesRegex(cal.CalibrationFormatError, "current content version"):
+        cal.patch_deck_height(archive(VERSION_3), 200.0, now)
+
+
 class WellNameTests(unittest.TestCase):
   """Converting between well names and zero-based rows and columns."""
 

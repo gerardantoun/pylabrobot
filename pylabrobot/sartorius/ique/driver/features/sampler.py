@@ -9,8 +9,14 @@ the probe wherever it is told. The driver adds the checks it lacks:
   on its own);
 - an XY move that would pass over the plate area needs the plate rail loaded, and so does
   lowering the probe or a contact search there; the plate area is the rectangle of every plate
-  format's corner wells in the calibration, widened by :data:`PLATE_AREA_MARGIN`;
-- lowering the probe or a contact search is refused while the probe reports contact;
+  format's corner wells in the calibration, widened by :data:`PLATE_AREA_MARGIN` to the plate's
+  footprint and the holder around it;
+- lowering the probe or a contact search is refused while the probe reports contact, and while
+  the shaker shakes and the plate rail is not known to be out;
+- a plain Z move does not stop at a surface, so it may not go below a floor
+  (:func:`lowest_plain_z`): over the plate area the highest sampling height of any calibrated
+  plate model, near a station that station's dip height, elsewhere a little above the deck. A
+  contact search, which stops on contact, approaches a surface instead;
 - nothing moves while a worklist runs, or while a mechanical device is faulted, except parking
   and raising the probe, which are always allowed.
 
@@ -23,9 +29,10 @@ from __future__ import annotations
 import asyncio
 import decimal
 import logging
-from typing import TYPE_CHECKING, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple
 
 from pylabrobot.sartorius.ique.driver.calibration import (
+  DEFAULT_SAMPLING_HEIGHTS,
   PLATE_FORMATS,
   Calibration,
   CalibrationError,
@@ -47,13 +54,24 @@ POSITION_TOLERANCE = 0.1
 """How far, in mm, a reported position may lie from a target and still count as there."""
 PARK_TOLERANCE = 0.5
 """How far, in mm, the probe may lie from the park position and still count as parked."""
-PLATE_AREA_MARGIN = 5.0
-"""How far, in mm, the plate area reaches beyond the centres of the corner wells: more than half
-the 96-well pitch."""
+PLATE_AREA_MARGIN = 15.0
+"""How far, in mm, the plate area reaches beyond the centres of the corner wells: over the
+plate's skirt (12 mm beyond the 384-well corner wells in X, 9 mm in Y) and the edge of the plate
+holder."""
+STATION_MARGIN = 10.0
+"""How far, in mm, from a station's taught position in X and in Y the probe counts as over that
+station."""
+DECK_CLEARANCE = 5.0
+"""How far, in mm, above the deck height a plain Z move may go where no other floor applies,
+and over the plate area when no plate model is calibrated."""
 Z_SETTLE_TIMEOUT = 15.0
 """Seconds a Z move may take to arrive."""
 Z_POLL_INTERVAL = 0.05
 """Seconds between Z reads while waiting for a Z move to arrive."""
+CONTACT_CLEAR_TIMEOUT = 2.0
+"""Seconds the contact sensor may take to clear once the probe is raised."""
+CONTACT_POLL_INTERVAL = 0.1
+"""Seconds between contact sensor reads while waiting for it to clear."""
 
 
 class SamplerPosition(NamedTuple):
@@ -96,6 +114,63 @@ def plate_area(calibration: Calibration) -> PlateArea:
     min(p.y for p in points) - PLATE_AREA_MARGIN,
     max(p.y for p in points) + PLATE_AREA_MARGIN,
   )
+
+
+def _deck_height(calibration: Calibration) -> float:
+  """Return the calibrated deck height.
+
+  Raises:
+    CalibrationMissingError: The deck height is not calibrated.
+  """
+  if not calibration.instrument.deck_height_is_calibrated:
+    raise CalibrationMissingError("the deck height is not calibrated")
+  return calibration.instrument.deck_height
+
+
+def highest_sampling_z(calibration: Calibration) -> float:
+  """Return the highest Z at which any calibrated plate model is sampled, in mm.
+
+  For a mapped model that is the deck height plus its highest mapped well bottom plus the
+  default sampling height of the map's format; for a model with only a taught depth, the deck
+  height plus that depth. Without any calibrated model it is the deck height plus
+  :data:`DECK_CLEARANCE`. The probe may go no lower over the plate area in a plain Z move:
+  whichever of the models is on the holder, its wells are not below this.
+
+  Raises:
+    CalibrationMissingError: The deck height is not calibrated.
+  """
+  deck = _deck_height(calibration)
+  heights: List[float] = []
+  for model in calibration.plate_models:
+    if model.depth_map is not None:
+      sampling = DEFAULT_SAMPLING_HEIGHTS[model.depth_map.plate_format]
+      heights.append(deck + max(model.depth_map.values) + sampling)
+    elif model.is_calibrated:
+      heights.append(deck + model.well_depth_offset)
+  return max(heights) if heights else deck + DECK_CLEARANCE
+
+
+def lowest_plain_z(calibration: Calibration, x: float, y: float) -> float:
+  """Return the lowest Z a plain (not contact-stopped) Z move may go to at an XY, in mm.
+
+  It is the highest of the floors that apply: over the plate area, :func:`highest_sampling_z`;
+  within :data:`STATION_MARGIN` of a calibrated station, its dip height; where neither applies,
+  the deck height plus :data:`DECK_CLEARANCE`.
+
+  Raises:
+    CalibrationMissingError: The deck height is not calibrated, or the calibration has no
+      plate corners.
+  """
+  floors: List[float] = []
+  if plate_area(calibration).contains(x, y):
+    floors.append(highest_sampling_z(calibration))
+  for station in calibration.stations:
+    near = abs(station.x - x) <= STATION_MARGIN and abs(station.y - y) <= STATION_MARGIN
+    if station.is_calibrated and near:
+      floors.append(_deck_height(calibration) + station.depth)
+  if not floors:
+    floors.append(_deck_height(calibration) + DECK_CLEARANCE)
+  return max(floors)
 
 
 def segment_meets_area(
@@ -141,6 +216,10 @@ class Sampler:
   """The sampler and the probe's contact sensor.
 
   Reached as ``driver.sampler``.
+
+  Attributes:
+    contact_clear_timeout: Seconds the contact sensor may take to clear once the probe is
+      raised (:meth:`raise_clear_of_contact`).
   """
 
   def __init__(self, driver: IQueDriver) -> None:
@@ -150,6 +229,7 @@ class Sampler:
       driver: The driver whose session it uses.
     """
     self._driver = driver
+    self.contact_clear_timeout = CONTACT_CLEAR_TIMEOUT
 
   @property
   def travel_height(self) -> float:
@@ -207,6 +287,20 @@ class Sampler:
         f"cannot {action}: the probe reports contact; raise it with move_z first"
       )
 
+  def _refuse_shaking(self, action: str) -> None:
+    """Raise if the shaker shakes while the plate rail is not known to be out; device states
+    must have been read afresh.
+
+    Raises:
+      UnsafeMotionError: It does.
+    """
+    shaker = self._driver.devices.get("Shaker")
+    if shaker is not None and shaker.state == "Running" and self._driver.rail_position != "ejected":
+      raise UnsafeMotionError(
+        f"cannot {action}: the shaker shakes the plate under the probe; stop it with "
+        "shaker.stop() first"
+      )
+
   def _require_rail_loaded_over(self, action: str, x: float, y: float) -> None:
     """Raise if a point over the plate area is to be used while the rail is not loaded.
 
@@ -254,12 +348,39 @@ class Sampler:
     await driver.confirm_operation("park the probe", "Sampler")
     logger.info("probe parked")
 
+  async def raise_clear_of_contact(self, action: str) -> None:
+    """Raise the probe to the top of its travel and wait until its contact sensor clears.
+
+    Raising is always allowed. The sensor gets :attr:`contact_clear_timeout` seconds.
+
+    Args:
+      action: What the probe is raised for, for the error message.
+
+    Raises:
+      UnsafeMotionError: The sensor still reports contact with the probe at the top: it is
+        stuck, or something holds the probe. Nothing more has moved.
+      DeviceFaultedError: The sampler faulted.
+    """
+    top = self._driver.require_limits().z_range.max
+    await self.move_z(top)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + self.contact_clear_timeout
+    while await self.has_contact():
+      if loop.time() >= deadline:
+        raise UnsafeMotionError(
+          f"cannot {action}: the contact sensor still reports contact with the probe raised to "
+          f"Z {top} mm; it appears to be stuck, or something holds the probe. Check the probe "
+          "before anything else moves"
+        )
+      await asyncio.sleep(CONTACT_POLL_INTERVAL)
+
   async def move_z(self, z: float) -> None:
     """Move the probe to a height and wait until it is there.
 
     Raising the probe is always allowed. Lowering it is refused while the probe reports contact,
-    over the plate area while the plate rail is not loaded, and while a mechanical device is
-    faulted.
+    over the plate area while the plate rail is not loaded, while the shaker shakes and the
+    rail is not known to be out, while a mechanical device is faulted, and below the floor of
+    :func:`lowest_plain_z` at the probe's XY: a plain move does not stop at a surface.
 
     Args:
       z: The height in mm; larger is higher.
@@ -267,7 +388,7 @@ class Sampler:
     Raises:
       ValueError: `z` is outside the travel.
       UnsafeMotionError: A safety rule forbids the move.
-      CalibrationMissingError: Lowering needs the calibration's plate area.
+      CalibrationMissingError: Lowering needs the calibration's plate area and deck height.
       DeviceFaultedError: The sampler faulted.
     """
     driver = self._driver
@@ -280,6 +401,14 @@ class Sampler:
     if lowering:
       await self._refuse_contact(action)
       self._require_rail_loaded_over(action, position.x, position.y)
+      self._refuse_shaking(action)
+      floor = lowest_plain_z(driver.require_calibration(), position.x, position.y)
+      if z < floor - POSITION_TOLERANCE:
+        raise UnsafeMotionError(
+          f"cannot {action}: a plain Z move does not stop at a surface, and at X {position.x}, "
+          f"Y {position.y} it may go no lower than Z {floor} mm; approach a surface with "
+          "find_z_contact, which stops on contact"
+        )
     await driver.call(driver.client.sampler_move_z, _millimetres(z))
     await self._wait_for_z(action, z)
     await driver.confirm_operation(action, "Sampler")
@@ -343,8 +472,8 @@ class Sampler:
 
     Raises:
       ValueError: The heights are outside the travel or not in order.
-      UnsafeMotionError: The probe reports contact already, or it is over the plate area with
-        the rail not loaded.
+      UnsafeMotionError: The probe reports contact already, it is over the plate area with the
+        rail not loaded, or the shaker shakes and the rail is not known to be out.
       DeviceOperationError: The controller reported an error for the search.
       DeviceFaultedError: The sampler faulted.
     """
@@ -359,6 +488,7 @@ class Sampler:
     await self._refuse_contact(action)
     position = await self.request_position()
     self._require_rail_loaded_over(action, position.x, position.y)
+    self._refuse_shaking(action)
     result = await driver.call(
       driver.client.sampler_find_z_contact,
       _millimetres(z_high),

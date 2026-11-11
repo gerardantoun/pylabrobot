@@ -43,6 +43,7 @@ from pylabrobot.sartorius.ique.driver.well_identification import (
 from pylabrobot.sartorius.ique.driver.worklist import (
   PlateReadSettings,
   TubeReadSettings,
+  acquisition_start,
   sampled_wells,
 )
 
@@ -125,6 +126,37 @@ class PlateRead:
   def wells(self) -> List[str]:
     """The names of the sampled wells, such as ``A01``, in sampling order."""
     return [well.well for well in self.identification.wells]
+
+  @property
+  def acquisition_start(self) -> Optional[float]:
+    """When recording started, in seconds since the first command of the worklist started,
+    on the controller's clock; None when the read did not record.
+
+    With it a read gives its transit delay (see ``PlateReadSettings.transit_delay``): a found
+    well's ``start_time`` plus this time, less the start of the well's sampling command counted
+    from the first command (:meth:`transit_delays`).
+    """
+    return acquisition_start(self.worklist)
+
+  def transit_delays(self) -> Dict[str, float]:
+    """Return the measured transit delay of every well found without a failed check: the time
+    from the start of its sampling command to its first events at the detector, in seconds.
+
+    Their median, from a read whose verdict is ``identified``, is a value for
+    ``PlateReadSettings.transit_delay`` at the read's pump speed.
+    """
+    start = self.acquisition_start
+    if start is None:
+      return {}
+    commands = {
+      well.well: well.start
+      for well in sampled_wells(self.worklist, allow_incomplete=self.stopped_early)
+    }
+    return {
+      well.well: round(well.start_time + start - commands[well.well], 3)
+      for well in self.identification.wells
+      if not well.flagged and not well.failed_checks and well.well in commands
+    }
 
   def well_events(self, well: str) -> EventData:
     """Return the events of one well, with the times they have in the plate's acquisition.
@@ -281,7 +313,9 @@ def plate_read_from_run(
   """Assign the events of a completed plate read to its wells and return the read.
 
   The sampled wells and the times of their sampling commands come from the completed worklist;
-  the event times from the time parameter and the time step of the controller's FCS file.
+  the event times from the time parameter and the time step of the controller's FCS file. With
+  a measured transit delay in `settings`, the first well is placed where it predicts, counted
+  from the start of the acquisition command.
 
   Args:
     run: The completed run of a worklist from
@@ -303,8 +337,16 @@ def plate_read_from_run(
   wells = sampled_wells(run.worklist, allow_incomplete=stopped_early)
   if wells:
     times = event_times(events, time_step(keywords))
+    start = acquisition_start(run.worklist) if settings.transit_delay is not None else None
     try:
-      identification = identify_wells(times, wells, settings.sip_time, settings.up_time)
+      identification = identify_wells(
+        times,
+        wells,
+        settings.sip_time,
+        settings.up_time,
+        transit_delay=settings.transit_delay,
+        acquisition_start=start,
+      )
     except WellIdentificationError as error:
       raise WellIdentificationFailedError(
         f"the {events.event_count} events of the plate read cannot be assigned to its "

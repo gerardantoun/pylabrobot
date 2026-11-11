@@ -89,6 +89,7 @@ from pylabrobot.sartorius.ique.driver.errors import (
   IQueTimeoutError,
   NotSetUpError,
   SessionRefusedError,
+  UnsafeMotionError,
   UnsupportedSystemError,
   WorklistActiveError,
   WorklistCancelledError,
@@ -107,7 +108,7 @@ from pylabrobot.sartorius.ique.driver.fcs import (
 from pylabrobot.sartorius.ique.driver.features.detector import Detector
 from pylabrobot.sartorius.ique.driver.features.plate_rail import PlatePosition, PlateRail
 from pylabrobot.sartorius.ique.driver.features.pump import Pump
-from pylabrobot.sartorius.ique.driver.features.sampler import Sampler
+from pylabrobot.sartorius.ique.driver.features.sampler import PARK_TOLERANCE, Sampler
 from pylabrobot.sartorius.ique.driver.features.shaker import Shaker
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,13 @@ MECHANICAL_DEVICES: Tuple[DeviceKind, ...] = (
 )
 """The devices that move or carry the plate and the probe: every device but the cytometer."""
 
+PROBE_DEVICES: Tuple[DeviceKind, ...] = ("Sampler", "ContactSensor")
+"""The devices setup initialises first, one at a time, so the probe is raised before anything
+moves under it."""
+
+OTHER_DEVICES: Tuple[DeviceKind, ...] = ("Pump", "Shaker", "Cytometer", "PlateRail")
+"""The devices setup initialises once the probe is raised and free of contact."""
+
 # The controller starts with the sampler, pump, shaker and cytometer; the optional devices are
 # set with Controller_ConfigureDevices. An iQue Screener PLUS has all four; they are included
 # with no configuration text, in this order.
@@ -151,9 +159,9 @@ PLUS_DEVICE_CONFIGURATION: Dict[DeviceKind, Optional[DeviceConfiguration]] = {
 }
 
 # The reset options for an instrument with factory settings. Every value is outside the range
-# the controller applies, so the controller uses its own defaults:
-# Z-arm power 70 %, liquid-level detection 2 %, an extra 3 mm of descent when finding contact,
-# and the plate rail's stored run current.
+# the controller applies, so the controller uses its own defaults: Z-arm power 70 %,
+# liquid-level detection 2 %, an extra 3 mm of descent when finding contact, and the plate
+# rail's stored run current. See IQueDriver for what each affects.
 DEFAULT_RESET_OPTIONS = DeviceResetOptions(
   is_in_dev_mode=False,
   is_sorpc6=False,
@@ -196,8 +204,10 @@ EXECUTABLE_COMMANDS: Tuple[Type[WorklistCommand], ...] = (
   wire.ShutdownFlowCytometerCommand,
 )
 
-# Commands that need the cytometer; before a worklist with one of them, the cytometer must say it
-# is ready to run: a run, a prime and a clean all need that.
+# Commands that need the cytometer. Before a worklist with one of them, the cytometer must say it
+# is ready to run (it starts its fluidics or records), or, when all of them run its own
+# maintenance routines, that it is ready for maintenance: some faults block a measurement but
+# not the routines that clear them.
 CYTOMETER_COMMANDS: Tuple[Type[WorklistCommand], ...] = (
   wire.StartFlowCytometerFluidicsCommand,
   wire.StartMatryoshkaFluidicsCommand,
@@ -834,6 +844,26 @@ def _acquired(worklist: Worklist) -> bool:
 class IQueDriver:
   """The session with the iQue Screener PLUS controller, and its features.
 
+  Device reset options. Every setup resets the devices with ``reset_options``, and the
+  controller applies them until the next reset, whichever client makes it. The default,
+  :data:`DEFAULT_RESET_OPTIONS`, sends values outside the ranges the controller applies, so it
+  uses its factory values:
+
+  - ``override_z_arm_percentage`` 0: the sampler's Z-arm power, applied from 40 to 100 %,
+    otherwise 70 %. It is the force the arm pushes down with, so it decides how hard the probe
+    presses on what it meets.
+  - ``override_lld_percentage`` 0.0: the sampler's liquid-level detection sensitivity, applied
+    above 0 and below 10 %, otherwise 2 %.
+  - ``override_z_arm_additional_contact_depth`` 0.0: how far below the lowest expected height
+    a contact search goes on, applied above 0 and below 10 mm, otherwise 3 mm. Deck-height
+    checks and calibration search within it.
+  - ``plate_rail_rc`` 0: the plate rail motor's run current, applied from 13 to 18, otherwise
+    the current stored in the rail.
+  - ``is_sorpc6``, ``is_in_dev_mode`` False: not used by these instruments.
+
+  An instrument whose own software sends other values behaves differently after this driver's
+  reset; pass the same values as ``reset_options`` to keep them.
+
   Attributes:
     plate_rail: Loading and ejecting the plate.
     shaker: The plate shaker and its plate lock.
@@ -842,6 +872,9 @@ class IQueDriver:
     detector: The cytometer.
     rail_position: Where the plate rail is, as far as the driver knows: ``loaded`` (in),
       ``ejected`` (out), or None when it is moving or not known.
+    interrupted_run: What the last run that was interrupted (its waiting task cancelled, its
+      progress callback failing, or its callbacks inconsistent) produced, collected after the
+      controller stopped it and before it was finalised; None before any such run.
   """
 
   def __init__(
@@ -886,7 +919,7 @@ class IQueDriver:
       controller_verbose_logging: The controller's log level to set at setup (debug when True).
         The controller stores it.
       supported_controller_versions: Controller versions (major, minor) setup accepts.
-      reset_options: The device options sent with the device reset.
+      reset_options: The device options sent with the device reset; see the class docstring.
 
     Raises:
       ValueError: Neither or both of `host` and `client` are given.
@@ -922,6 +955,7 @@ class IQueDriver:
     self.calibration: Optional[Calibration] = None
     self.calibration_problem: Optional[str] = None
     self.rail_position: Optional[PlatePosition] = None
+    self.interrupted_run: Optional[CompletedRun] = None
 
     self._system_state: Optional[SystemState] = None
     self._devices: Dict[DeviceKind, DeviceInfo] = {}
@@ -1053,9 +1087,15 @@ class IQueDriver:
        e. ``Controller_ResetDevices`` with the reset options; it reconnects every device and
           answers False when the system ID it stored does not match the instrument, in which
           case it disconnects the sampler and setup fails;
-       f. ``Controller_InitializeDevices([])``: home and park the sampler, stop the pump, close
-          the plate lock and home the shaker, home the plate rail and eject it, start the
-          contact sensor.
+       f. ``Controller_InitializeDevices(["Sampler"])``: home the sampler if needed and park
+          it, Z first; then ``(["ContactSensor"])``: start the contact sensor. The controller
+          initialises the devices of one call at the same time, and the plate rail homes and
+          moves out when initialised: it must not move under a probe left down in a plate;
+       g. read the sampler's Z range, its Z and the contact sensor; unless the probe is at the
+          top of its travel and reports no contact, setup fails here, before anything else
+          moves;
+       h. ``Controller_InitializeDevices`` of the pump, shaker, cytometer and plate rail: stop
+          the pump, close the plate lock and home the shaker, home the plate rail and eject it.
 
     8. Read the sampler's ranges and smallest step and the pump's speed limits; a reset may
        have connected other devices.
@@ -1063,8 +1103,10 @@ class IQueDriver:
        fails setup. A cytometer that is switched off is reported and left off.
     10. Read the system state, the contact sensor and the cytometer's power.
 
-    A worklist that finished but was not finalised is left as it is; :meth:`run_worklist`
-    refuses to start until it is finalised (``finalize_previous=True``).
+    A worklist that finished but was not finalised is left as it is and named in a warning:
+    every operation refuses to start until it is finalised (``finalize_previous=True``,
+    :meth:`finalize_worklist`), or recovered and finalised (:meth:`recover_unfinalized_run`).
+    A controller that restarted holds the last worklist it ran this way.
 
     Args:
       require_calibration: Fail when the calibration file is missing or unreadable. When False,
@@ -1076,7 +1118,8 @@ class IQueDriver:
       ControllerVersionError: The controller's version is not supported.
       UnsupportedSystemError: The instrument is not an iQue Screener PLUS.
       CalibrationMissingError: The calibration file is missing or unreadable.
-      DeviceResetError: The reset failed or devices did not become ready in time.
+      DeviceResetError: The reset failed, the probe is not raised and free of contact after
+        the sampler's initialisation, or devices did not become ready in time.
       DeviceFaultedError: A device is faulted after initialisation.
       ControllerFault: The controller refused a call.
     """
@@ -1148,8 +1191,9 @@ class IQueDriver:
       if status == "CompletedUnfinalizedWorklist":
         name = self._current_worklist.name if self._current_worklist is not None else None
         logger.warning(
-          "the instrument holds a finished worklist (%r) that was not finalised; run_worklist "
-          "needs finalize_previous=True",
+          "the instrument holds a finished worklist (%r) that was not finalised; no worklist "
+          "runs until it is. finalize_worklist() finalises it; recover_unfinalized_run() first "
+          "downloads its events, then finalises it",
           name,
         )
       await self.call(client.controller_set_verbose_logging, self._controller_verbose_logging)
@@ -1164,7 +1208,7 @@ class IQueDriver:
           "the controller's stored system ID does not match the instrument; it disconnected the "
           "sampler and cleared the stored ID. Run setup again."
         )
-      await self.call(client.controller_initialize_devices, [], timeout=self._initialize_timeout)
+      await self._initialize_probe_first()
 
     x_range = _axis(await self.call(client.sampler_get_x_range), "X")
     y_range = _axis(await self.call(client.sampler_get_y_range), "Y")
@@ -1192,6 +1236,48 @@ class IQueDriver:
     self._contact = await self.call(client.contact_sensor_has_contact)
     if not await self.call(client.controller_cytometer_has_power):
       logger.warning("the detector is switched off; detector.power_on() switches it on")
+
+  async def _initialize(self, kinds: Sequence[DeviceKind]) -> None:
+    """Initialise the devices of a list that are connected, in one call; nothing when none is."""
+    devices = await self._refresh_devices()
+    connected = [
+      kind for kind in kinds if kind in devices and devices[kind].state != "Disconnected"
+    ]
+    if connected:
+      await self.call(
+        self._client.controller_initialize_devices, connected, timeout=self._initialize_timeout
+      )
+
+  async def _initialize_probe_first(self) -> None:
+    """Initialise the sampler and the contact sensor, check the probe, then initialise the
+    other devices (setup steps 7f to 7h).
+
+    Raises:
+      DeviceFaultedError: The sampler or the contact sensor faulted when initialised.
+      DeviceResetError: The probe is not at the top of its travel, or reports contact.
+    """
+    client = self._client
+    for kind in PROBE_DEVICES:
+      await self._initialize([kind])
+    devices = await self._refresh_devices()
+    faulted = {
+      kind: devices[kind]
+      for kind in PROBE_DEVICES
+      if kind in devices and devices[kind].state == "Faulted"
+    }
+    if faulted:
+      raise DeviceFaultedError("initialise the sampler and the contact sensor", faulted)
+    top = _axis(await self.call(client.sampler_get_z_range), "Z").max
+    z = float(await self.call(client.sampler_get_z))
+    contact = await self.call(client.contact_sensor_has_contact)
+    if z < top - PARK_TOLERANCE or contact:
+      touching = " and reports contact" if contact else ""
+      raise DeviceResetError(
+        f"after its initialisation the probe is at Z {z} mm{touching}, not raised clear at "
+        f"Z {top} mm. The plate rail and the shaker were not initialised, so that nothing "
+        "moves under the probe; check the probe, then run setup again"
+      )
+    await self._initialize(OTHER_DEVICES)
 
   async def _load_calibration(self, require_calibration: bool) -> None:
     """Download and parse the calibration file (setup step 6).
@@ -1222,6 +1308,9 @@ class IQueDriver:
     reported = await self.call(self._client.controller_get_device_statuses)
     devices = {info.kind: info for info in reported or [] if info is not None}
     self._devices.update(devices)
+    rail = devices.get("PlateRail")
+    if rail is not None and rail.state != "Ready":
+      self.rail_position = None
     return devices
 
   async def _wait_until_devices_ready(self) -> None:
@@ -1558,7 +1647,7 @@ class IQueDriver:
     Raises:
       DeviceFaultedError: A monitored device is faulted.
       DeviceNotReadyError: A monitored device is not ready, or the cytometer is not ready to
-        run a worklist that needs it.
+        run (or, for a worklist of its maintenance routines alone, not ready for maintenance).
       IQueError: Devices report warnings and `allow_warnings` is False.
     """
     devices = await self._refresh_devices()
@@ -1575,10 +1664,22 @@ class IQueDriver:
       info = devices.get(kind)
       if info is None or info.state != "Ready":
         raise DeviceNotReadyError("run the worklist", kind, info)
-    if any(isinstance(command, CYTOMETER_COMMANDS) for command in commands):
-      if not await self.call(self._client.cytometer_is_ready_to_run):
+    cytometer_commands = [
+      command for command in commands if isinstance(command, CYTOMETER_COMMANDS)
+    ]
+    if cytometer_commands:
+      cleans_only = all(
+        isinstance(command, wire.CleanFlowCytometerCommand) for command in cytometer_commands
+      )
+      if cleans_only:
+        ready = await self.call(self._client.cytometer_is_ready_to_clean)
+        need = "ready for fluidics maintenance"
+      else:
+        ready = await self.call(self._client.cytometer_is_ready_to_run)
+        need = "ready to run"
+      if not ready:
         raise DeviceNotReadyError(
-          "run the worklist: the cytometer is not ready to run",
+          f"run the worklist: the cytometer is not {need}",
           "Cytometer",
           devices.get("Cytometer"),
         )
@@ -1606,19 +1707,22 @@ class IQueDriver:
     Before sending, the worklist is checked (commands present, unique IDs, every command one
     the controller executes), no worklist may be running, an unfinalised one is finalised only
     with `finalize_previous`, every monitored device must be ready, and the cytometer must be
-    ready to run when the worklist uses it.
+    ready to run when the worklist uses it (ready for maintenance when it only runs the
+    cytometer's own maintenance routines).
 
     While it runs, `on_progress` is called for every command that starts or ends, and the
     worklist status is polled so that a lost completion callback cannot hang the run. The
     streamed event values are collected and their running count checked. At the end, the
     controller's FCS file is downloaded for a run that acquired and becomes the authoritative
-    event data: its checksum must match what the controller reported, its parameters must be
-    the instrument's, and it must hold at least the streamed events. Then the worklist is
-    finalised.
+    event data: its checksum must match what the controller reported (a mismatch is downloaded
+    once more), its parameters must be the instrument's, and it must hold at least the streamed
+    events. Then the worklist is finalised.
 
     If the waiting task is cancelled, the run times out or `on_progress` raises, the worklist is
     cancelled, the driver waits for the controller to stop it (it parks the probe, stops the
-    pump, the shaker and the fluidics and ejects the plate) and finalises it before raising.
+    pump, the shaker and the fluidics and ejects the plate), collects what the run produced
+    (kept as :attr:`interrupted_run` for the interrupted cases) and finalises it before
+    raising.
 
     Args:
       worklist: The worklist; the controller gives it a new ID when it starts.
@@ -1691,7 +1795,7 @@ class IQueDriver:
       )
       completed = await self._cancel_and_wait(run)
       try:
-        partial = await self._results(run, completed, require_file=False)
+        partial = await self._partial_results(run, completed)
       finally:
         await self._finalize()
       raise WorklistTimeoutError(
@@ -1702,9 +1806,15 @@ class IQueDriver:
       ) from None
     except BaseException:
       if client.is_open:
-        logger.error("the run was interrupted; cancelling the worklist and finalising it")
-        await self._cancel_and_wait(run)
-        await self._finalize()
+        logger.error(
+          "the run was interrupted; cancelling the worklist, collecting what it produced "
+          "(interrupted_run) and finalising it"
+        )
+        stopped = await self._cancel_and_wait(run)
+        try:
+          self.interrupted_run = await self._partial_results(run, stopped)
+        finally:
+          await self._finalize()
       raise
 
     succeeded = (
@@ -1856,42 +1966,113 @@ class IQueDriver:
       require_file: Raise when a run that acquired has no FCS file.
 
     Raises:
-      EventDataError: The data is missing (with `require_file`) or inconsistent.
+      EventDataError: The data is missing (with `require_file`) or inconsistent; the error
+        holds the run without parsed events, and the bytes downloaded.
     """
-    events: Optional[EventData] = None
-    keywords: Optional[Dict[str, str]] = None
-    data: Optional[bytes] = None
-    streamed = run.stream.event_count
-    if _acquired(completed):
-      available = await self.call(self._client.worklist_is_fcs_file_available)
-      if available:
-        data = await self._download(self._client.worklist_get_current_fcs_file)
-        events, keywords = self._check_fcs_file(run, completed, data)
-      elif require_file:
-        raise EventDataError("the run acquired events, but the controller has no FCS file")
-      else:
-        logger.warning("the run acquired, but the controller has no FCS file")
     if run.values_received != completed.fcs_data_written:
       logger.warning(
         "the controller sent %d event values, %d arrived",
         completed.fcs_data_written,
         run.values_received,
       )
+    return await self._collect(
+      completed,
+      parameter_names=run.stream.parameter_names,
+      streamed=run.stream.event_count,
+      stream_consistent=run.stream_consistent,
+      require_file=require_file,
+    )
+
+  async def _partial_results(self, run: _ActiveRun, completed: Worklist) -> CompletedRun:
+    """Collect what a run that did not complete produced; inconsistent data is logged, and the
+    run is returned with the bytes downloaded and without parsed events."""
+    try:
+      return await self._results(run, completed, require_file=False)
+    except EventDataError as error:
+      logger.error("the event data of the stopped run are inconsistent: %s", error)
+      if error.run is None:
+        raise
+      return error.run
+
+  async def _collect(
+    self,
+    completed: Worklist,
+    *,
+    parameter_names: Sequence[str],
+    streamed: int,
+    stream_consistent: bool,
+    require_file: bool,
+  ) -> CompletedRun:
+    """Download and check the FCS file of a finished worklist that acquired.
+
+    Args:
+      completed: The worklist as the controller completed it.
+      parameter_names: The parameters the file must have.
+      streamed: How many events arrived through the event stream.
+      stream_consistent: Whether they arrived without gaps.
+      require_file: Raise when a run that acquired has no FCS file.
+
+    Raises:
+      EventDataError: The data is missing (with `require_file`) or inconsistent.
+    """
+
+    def partial(data: Optional[bytes]) -> CompletedRun:
+      """Return the run with the bytes downloaded, without parsed events."""
+      return CompletedRun(
+        worklist=completed,
+        events=None,
+        fcs_keywords=None,
+        fcs_file=data,
+        stream_event_count=streamed,
+        stream_consistent=stream_consistent,
+        client_time_offset=completed.client_time_offset,
+      )
+
+    events: Optional[EventData] = None
+    keywords: Optional[Dict[str, str]] = None
+    data: Optional[bytes] = None
+    if _acquired(completed):
+      available = await self.call(self._client.worklist_is_fcs_file_available)
+      if available:
+        data = await self._download(self._client.worklist_get_current_fcs_file)
+        if file_crc32(data) != completed.fcs_file_crc:
+          logger.warning("the FCS file's checksum differs from the controller's; downloading again")
+          data = await self._download(self._client.worklist_get_current_fcs_file)
+        events, keywords = self._check_fcs_file(
+          completed, data, parameter_names, streamed, partial(data)
+        )
+      elif require_file:
+        raise EventDataError(
+          "the run acquired events, but the controller has no FCS file", partial(None)
+        )
+      else:
+        logger.warning("the run acquired, but the controller has no FCS file")
     return CompletedRun(
       worklist=completed,
       events=events,
       fcs_keywords=keywords,
       fcs_file=data,
       stream_event_count=streamed,
-      stream_consistent=run.stream_consistent,
+      stream_consistent=stream_consistent,
       client_time_offset=completed.client_time_offset,
     )
 
   @staticmethod
   def _check_fcs_file(
-    run: _ActiveRun, completed: Worklist, data: bytes
+    completed: Worklist,
+    data: bytes,
+    parameter_names: Sequence[str],
+    streamed: int,
+    partial: CompletedRun,
   ) -> Tuple[EventData, Dict[str, str]]:
     """Read the controller's FCS file and check it against the run.
+
+    Args:
+      completed: The worklist as the controller completed it.
+      data: The file.
+      parameter_names: The parameters the file must have.
+      streamed: How many events arrived through the event stream.
+      partial: The run to attach to an error.
 
     Raises:
       EventDataError: Wrong checksum, unreadable, other parameters, or fewer events than were
@@ -1900,22 +2081,28 @@ class IQueDriver:
     crc = file_crc32(data)
     if crc != completed.fcs_file_crc:
       raise EventDataError(
-        f"the FCS file {completed.fcs_file_name!r} has checksum {crc:08x}; the controller "
-        f"reported {completed.fcs_file_crc:08x}"
+        f"the FCS file {completed.fcs_file_name!r} has checksum {crc:08x} after two downloads; "
+        f"the controller reported {completed.fcs_file_crc:08x}",
+        partial,
+        data,
       )
     try:
       events, keywords = read_fcs(data)
     except FcsError as error:
-      raise EventDataError(f"the controller's FCS file is unreadable: {error}") from error
-    if events.parameter_names != run.stream.parameter_names:
       raise EventDataError(
-        f"the FCS file has parameters {events.parameter_names}, expected "
-        f"{run.stream.parameter_names}"
+        f"the controller's FCS file is unreadable: {error}", partial, data
+      ) from error
+    if events.parameter_names != tuple(parameter_names):
+      raise EventDataError(
+        f"the FCS file has parameters {events.parameter_names}, expected {tuple(parameter_names)}",
+        partial,
+        data,
       )
-    streamed = run.stream.event_count
     if events.event_count < streamed:
       raise EventDataError(
-        f"the FCS file holds {events.event_count} events, fewer than the {streamed} streamed"
+        f"the FCS file holds {events.event_count} events, fewer than the {streamed} streamed",
+        partial,
+        data,
       )
     if events.event_count > streamed:
       logger.warning(
@@ -1969,6 +2156,86 @@ class IQueDriver:
     await self.call(self._client.worklist_skip_to, command_id)
     logger.info("skip to command %s requested", command_id)
     return True
+
+  async def _unfinalized_status(self, action: str) -> bool:
+    """Return whether the controller holds a finished, unfinalised worklist.
+
+    Raises:
+      NotSetUpError: The driver is not set up.
+      WorklistActiveError: A worklist runs.
+    """
+    self.require_setup()
+    if self._run is not None:
+      raise WorklistActiveError(
+        f"cannot {action}: a worklist of this driver runs", "RunningWorklist"
+      )
+    status = await self.call(self._client.worklist_get_status)
+    self._worklist_status = status
+    if status == "RunningWorklist":
+      raise WorklistActiveError(f"cannot {action}: a worklist runs on the instrument", status)
+    return status == "CompletedUnfinalizedWorklist"
+
+  async def finalize_worklist(self) -> bool:
+    """Finalise the finished worklist the controller holds, so that another can run.
+
+    Finalising a plate or tube read moves its files into the controller's archive; its events
+    are not downloaded (:meth:`recover_unfinalized_run` downloads them first).
+
+    Returns:
+      Whether there was one to finalise.
+
+    Raises:
+      NotSetUpError: The driver is not set up.
+      WorklistActiveError: A worklist runs.
+    """
+    if not await self._unfinalized_status("finalise the worklist"):
+      logger.info("no finished worklist waits to be finalised")
+      return False
+    current = await self.call(self._client.worklist_get_current)
+    await self._finalize()
+    logger.info("finalised the worklist %r", None if current is None else current.name)
+    return True
+
+  async def recover_unfinalized_run(self) -> Optional[CompletedRun]:
+    """Collect the finished, unfinalised worklist the controller holds, then finalise it.
+
+    The worklist comes as the controller recorded it; when it recorded events and the controller
+    still has its FCS file, the file is downloaded and checked against the worklist's checksum
+    and the instrument's parameters. No event stream was received for it, so the run's stream
+    counts are 0 and it is not stream-consistent.
+
+    Returns:
+      The run, or None when the controller holds no finished worklist.
+
+    Raises:
+      NotSetUpError: The driver is not set up.
+      WorklistActiveError: A worklist runs.
+      IQueError: The controller holds no record of the worklist.
+      EventDataError: The FCS file is inconsistent; the worklist is not finalised then, and the
+        error holds what was downloaded.
+    """
+    if not await self._unfinalized_status("recover the worklist"):
+      logger.info("no finished worklist waits to be finalised")
+      return None
+    current = await self.call(self._client.worklist_get_current)
+    if current is None:
+      raise IQueError("the controller holds a finished worklist but reports none")
+    assert self.system_type is not None
+    table = parameter_table_for_system_kind(self.system_type)
+    run = await self._collect(
+      current,
+      parameter_names=table.names,
+      streamed=0,
+      stream_consistent=False,
+      require_file=False,
+    )
+    await self._finalize()
+    logger.info(
+      "recovered the worklist %r (%s events) and finalised it",
+      current.name,
+      "no" if run.events is None else run.events.event_count,
+    )
+    return run
 
   # -------------------------------------------------------------------------------------------
   # Calibration
@@ -2101,8 +2368,13 @@ class IQueDriver:
   async def stop(self, *, cancel: bool = False) -> None:
     """Leave the instrument at rest and end the session.
 
-    Stops the pump and the shaker and parks the probe, then closes the session. A device that
-    is faulted is skipped and reported after the session is closed.
+    Stops the pump and the shaker, raises the probe to the top of its travel and waits for its
+    contact sensor to clear, parks the probe, then closes the session. A device that is faulted
+    is skipped and reported after the session is closed.
+
+    When the contact sensor does not clear with the probe raised, nothing more moves and the
+    session stays open, so that the probe can be checked and ``stop`` called again: closing
+    would leave the probe where it is, and the next setup initialises the devices.
 
     Args:
       cancel: Cancel a running worklist first and wait for it to stop; without it, a running
@@ -2110,7 +2382,7 @@ class IQueDriver:
 
     Raises:
       WorklistActiveError: A worklist runs and `cancel` is False.
-      UnsafeMotionError: The probe reports contact and cannot be parked.
+      UnsafeMotionError: The probe still reports contact with it raised; the session is open.
       DeviceFaultedError: A device was faulted and was skipped; the session is closed.
     """
     if not self._set_up:
@@ -2123,6 +2395,7 @@ class IQueDriver:
         )
       await self._cancel_for_stop()
     skipped: Dict[DeviceKind, DeviceInfo] = {}
+    close = True
     try:
       devices = await self._refresh_devices()
       for kind in ("Pump", "Shaker", "Sampler"):
@@ -2134,11 +2407,18 @@ class IQueDriver:
       if "Shaker" not in skipped:
         await self.shaker.stop()
       if "Sampler" not in skipped:
+        try:
+          await self.sampler.raise_clear_of_contact("park the probe")
+        except UnsafeMotionError:
+          close = False
+          logger.error("the probe stays in contact; the session stays open")
+          raise
         await self.sampler.home()
     finally:
-      self._set_up = False
-      await self._client.close()
-      logger.info("session with the iQue controller closed")
+      if close:
+        self._set_up = False
+        await self._client.close()
+        logger.info("session with the iQue controller closed")
     if skipped:
       raise DeviceFaultedError("stop every device", skipped)
 

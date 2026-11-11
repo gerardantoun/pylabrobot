@@ -67,6 +67,24 @@ class ShakerTests(unittest.IsolatedAsyncioTestCase):
     await self.driver.sampler.move_z(250.0)
     await self.shaker.start(1000)
 
+  async def test_plate_does_not_move_under_a_low_probe(self) -> None:
+    """Homing and the plate lock, which move the plate, wait for the probe to be raised while
+    the rail is in; with the rail out they need no probe check."""
+    await self.driver.plate_rail.load()
+    await self.driver.sampler.move_xy(50.0, 80.0)
+    await self.driver.sampler.move_z(220.0)
+    self.controller.calls.clear()
+    for operation in (self.shaker.home, self.shaker.lock_plate, self.shaker.unlock_plate):
+      with self.assertRaises(UnsafeMotionError):
+        await operation()
+    self.assertFalse(
+      {"shaker_home", "shaker_close_plate_lock", "shaker_open_plate_lock"} & set(self.names())
+    )
+    await self.driver.sampler.move_z(250.0)
+    await self.shaker.home()
+    await self.shaker.unlock_plate()
+    await self.shaker.lock_plate()
+
   async def test_stop(self) -> None:
     """Stop sends nothing to a still shaker, and stops a shaking one."""
     await self.shaker.stop()

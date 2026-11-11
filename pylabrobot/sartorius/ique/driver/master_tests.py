@@ -129,6 +129,7 @@ class RunPlan:
     crc_offset: Added to the reported checksum.
     index_gap: Extra values added to the running count of the first chunk.
     foreign_command: Report this command as started instead of the worklist's own.
+    corrupt_downloads: How many downloads of the FCS file arrive with one byte changed.
   """
 
   stream: Sequence[array.array] = ()
@@ -142,6 +143,7 @@ class RunPlan:
   crc_offset: int = 0
   index_gap: int = 0
   foreign_command: Optional[wire.WorklistCommand] = None
+  corrupt_downloads: int = 0
 
 
 class FakeController:
@@ -728,8 +730,12 @@ class FakeController:
     self.calls.append(("worklist_get_current_fcs_file", ()))
     if self.fcs is None:
       raise controller_fault("Worklist_GetCurrentFCSFile", "no file")
-    yield self.fcs[:100]
-    yield self.fcs[100:]
+    data = self.fcs
+    if self.plan.corrupt_downloads > 0:
+      self.plan.corrupt_downloads -= 1
+      data = data[:-1] + bytes([data[-1] ^ 0xFF])
+    yield data[:100]
+    yield data[100:]
 
 
 SETUP_CALLS = [
@@ -745,6 +751,15 @@ SETUP_CALLS = [
   "controller_get_device_statuses",
   "controller_enable_demo_mode",
   "controller_reset_devices",
+  "controller_get_device_statuses",
+  "controller_initialize_devices",
+  "controller_get_device_statuses",
+  "controller_initialize_devices",
+  "controller_get_device_statuses",
+  "sampler_get_z_range",
+  "sampler_get_z",
+  "contact_sensor_has_contact",
+  "controller_get_device_statuses",
   "controller_initialize_devices",
   "sampler_get_x_range",
   "sampler_get_y_range",
@@ -809,7 +824,11 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fake.arguments("controller_enable_demo_mode"), (False,))
     self.assertEqual(fake.arguments("controller_reset_devices"), (DEFAULT_RESET_OPTIONS,))
     self.assertEqual(fake.timeouts["controller_reset_devices"], 180.0)
-    self.assertEqual(fake.arguments("controller_initialize_devices"), ([],))
+    initialised = [args for name, args in fake.calls if name == "controller_initialize_devices"]
+    self.assertEqual(
+      initialised,
+      [(["Sampler"],), (["ContactSensor"],), (["Pump", "Shaker", "Cytometer", "PlateRail"],)],
+    )
     self.assertEqual(fake.timeouts["controller_initialize_devices"], 120.0)
     self.assertEqual(sorted(CALLBACKS), fake.handlers_at_open)
     self.assertTrue(driver.is_set_up)
@@ -876,6 +895,39 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
     self.assertNotIn("controller_initialize_devices", fake.names())
     self.assertFalse(fake.is_open)
 
+  async def test_probe_left_down_stops_setup_before_the_rail_moves(self) -> None:
+    """A probe that is not raised after the sampler's initialisation, or reports contact,
+    fails setup before the plate rail and the shaker are initialised."""
+    for position, contact in (([20.0, 100.0, 204.0], False), ([131.0, 195.0, 250.0], True)):
+      fake = FakeController()
+      fake.replies["sampler_home"] = None
+      fake.position = list(position)
+      fake.contact = contact
+      with self.assertRaises(DeviceResetError) as caught:
+        await make_driver(fake).setup()
+      self.assertIn("nothing moves under the probe", str(caught.exception))
+      initialised = [args for name, args in fake.calls if name == "controller_initialize_devices"]
+      self.assertEqual(initialised, [(["Sampler"],), (["ContactSensor"],)])
+      self.assertFalse(fake.is_open)
+
+  async def test_probe_device_fault_stops_setup(self) -> None:
+    """A contact sensor that faults when initialised fails setup before the rail moves."""
+    fake = FakeController()
+    original = fake.replies["controller_initialize_devices"]
+
+    def initialise(kinds: List[DeviceKind]) -> Any:
+      """Fault the contact sensor as it starts."""
+      if kinds == ["ContactSensor"]:
+        fake.states["ContactSensor"] = "Faulted"
+      return original
+
+    fake.replies["controller_initialize_devices"] = initialise
+    with self.assertRaises(DeviceFaultedError) as caught:
+      await make_driver(fake).setup()
+    self.assertEqual(list(caught.exception.devices), ["ContactSensor"])
+    initialised = [args for name, args in fake.calls if name == "controller_initialize_devices"]
+    self.assertNotIn((["Pump", "Shaker", "Cytometer", "PlateRail"],), initialised)
+
   async def test_faulted_after_initialisation(self) -> None:
     """A device faulted after initialisation fails setup."""
     fake = FakeController()
@@ -938,11 +990,16 @@ class SetupTests(unittest.IsolatedAsyncioTestCase):
       await driver.pump.stop()
 
   async def test_unfinalised_worklist_is_left(self) -> None:
-    """A finished, unfinalised worklist is not finalised by setup; a run then needs consent."""
+    """A finished, unfinalised worklist is not finalised by setup, which names the ways to
+    finalise it; a run then needs consent."""
     fake = FakeController()
     fake.status = "CompletedUnfinalizedWorklist"
     driver = make_driver(fake)
-    await driver.setup()
+    with self.assertLogs("pylabrobot.sartorius.ique.driver.master", logging.WARNING) as logs:
+      await driver.setup()
+    text = "\n".join(logs.output)
+    self.assertIn("finalize_worklist()", text)
+    self.assertIn("recover_unfinalized_run()", text)
     self.assertIn("controller_reset_devices", fake.names())
     self.assertNotIn("worklist_finalize", fake.names())
     with self.assertRaises(WorklistActiveError):
@@ -1003,6 +1060,14 @@ class StateTests(unittest.IsolatedAsyncioTestCase):
     fake.fire(
       "OnDeviceStateChanged", DeviceInfo(kind="PlateRail", messages=[], model="m", state="Running")
     )
+    self.assertIsNone(driver.rail_position)
+
+  async def test_polling_forgets_the_rail_position_too(self) -> None:
+    """A rail that a status read reports not ready has no known position, without a callback."""
+    driver, fake = await set_up()
+    self.assertEqual(driver.rail_position, "ejected")
+    fake.states["PlateRail"] = "Faulted"
+    await driver.request_status()
     self.assertIsNone(driver.rail_position)
 
   async def test_request_status(self) -> None:
@@ -1129,6 +1194,21 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
       await self.driver.run_worklist(acquiring_worklist())
     self.assertNotIn("worklist_run", self.fake.names())
 
+  async def test_cleans_need_the_cytometer_ready_for_maintenance(self) -> None:
+    """A worklist of the cytometer's own routines needs it ready for maintenance, not ready to
+    run: a fault that blocks measurements must not block the routine that clears it."""
+    self.fake.replies["cytometer_is_ready_to_run"] = False
+    self.plan(stream=(), file_events=None)
+    ids = CommandIds()
+    clean = wire.CleanFlowCytometerCommand(**ids.fields("FlowCytometer"), clean_method="Unclog")
+    await self.driver.run_worklist(make_worklist([clean]))
+    self.assertIn("cytometer_is_ready_to_clean", self.fake.names())
+    self.assertNotIn("cytometer_is_ready_to_run", self.fake.names())
+    self.fake.replies["cytometer_is_ready_to_clean"] = False
+    with self.assertRaises(DeviceNotReadyError) as caught:
+      await self.driver.run_worklist(make_worklist([clean]))
+    self.assertIn("ready for fluidics maintenance", str(caught.exception))
+
   async def test_only_monitored_devices_count(self) -> None:
     """A worklist that monitors some devices ignores the state of the others."""
     self.fake.states["Shaker"] = "Disconnected"
@@ -1194,6 +1274,12 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
     self.assertIn("worklist_cancel", names)
     self.assertLess(names.index("worklist_cancel"), names.index("worklist_finalize"))
     self.assertEqual(self.fake.status, "NoActiveWorklist")
+    # What the run produced is collected before it is finalised.
+    self.assertLess(names.index("worklist_get_current_fcs_file"), names.index("worklist_finalize"))
+    run = self.driver.interrupted_run
+    assert run is not None
+    self.assertEqual(run.events, self.data)
+    self.assertEqual(run.stop_reason, "Cancelled")
 
   async def test_progress_callback_error(self) -> None:
     """An error of the progress callback cancels the worklist and is raised."""
@@ -1207,6 +1293,9 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
       await self.driver.run_worklist(acquiring_worklist(), on_progress=fail)
     self.assertIn("worklist_cancel", self.fake.names())
     self.assertIn("worklist_finalize", self.fake.names())
+    run = self.driver.interrupted_run
+    assert run is not None
+    self.assertEqual(run.events, self.data)
 
   async def test_timeout(self) -> None:
     """A run past its timeout is cancelled, finalised and raised as WorklistTimeoutError."""
@@ -1239,11 +1328,17 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(run.events, self.data)
 
   async def test_file_with_fewer_events(self) -> None:
-    """A file with fewer events than were streamed is inconsistent; the run is still finalised."""
+    """A file with fewer events than were streamed is inconsistent; the run is still finalised,
+    and the error holds the run and the bytes."""
     self.plan(file_events=self.data.slice(0, 5))
-    with self.assertRaises(EventDataError):
+    with self.assertRaises(EventDataError) as caught:
       await self.driver.run_worklist(acquiring_worklist())
     self.assertIn("worklist_finalize", self.fake.names())
+    self.assertEqual(caught.exception.data, self.fake.fcs)
+    run = caught.exception.run
+    assert run is not None
+    self.assertEqual(run.fcs_file, self.fake.fcs)
+    self.assertTrue(run.worklist.all_commands_completed)
 
   async def test_running_count_gap(self) -> None:
     """A gap in the running value count marks the stream inconsistent."""
@@ -1254,17 +1349,76 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(run.events, self.data)
 
   async def test_checksum_mismatch(self) -> None:
-    """A file whose checksum differs from the controller's is refused."""
+    """A file whose checksum differs from the controller's twice is refused; the error holds
+    the run and the bytes."""
     self.plan(crc_offset=1)
-    with self.assertRaises(EventDataError):
-      await self.driver.run_worklist(acquiring_worklist())
+    with self.assertLogs("pylabrobot.sartorius.ique.driver.master", logging.WARNING):
+      with self.assertRaises(EventDataError) as caught:
+        await self.driver.run_worklist(acquiring_worklist())
     self.assertIn("worklist_finalize", self.fake.names())
+    self.assertEqual(self.fake.names().count("worklist_get_current_fcs_file"), 2)
+    self.assertEqual(caught.exception.data, self.fake.fcs)
+    assert caught.exception.run is not None
+    self.assertEqual(caught.exception.run.fcs_file, self.fake.fcs)
+
+  async def test_checksum_mismatch_is_downloaded_again(self) -> None:
+    """A download that arrives damaged is made once more, and the good file is used."""
+    self.plan(corrupt_downloads=1)
+    with self.assertLogs("pylabrobot.sartorius.ique.driver.master", logging.WARNING) as logs:
+      run = await self.driver.run_worklist(acquiring_worklist())
+    self.assertIn("downloading again", "\n".join(logs.output))
+    self.assertEqual(self.fake.names().count("worklist_get_current_fcs_file"), 2)
+    self.assertEqual(run.events, self.data)
 
   async def test_no_file(self) -> None:
-    """A completed run that acquired but has no file is refused."""
+    """A completed run that acquired but has no file is refused; the error holds the run."""
     self.plan(file_events=None)
-    with self.assertRaises(EventDataError):
+    with self.assertRaises(EventDataError) as caught:
       await self.driver.run_worklist(acquiring_worklist())
+    assert caught.exception.run is not None
+    self.assertIsNone(caught.exception.data)
+    self.assertTrue(caught.exception.run.worklist.all_commands_completed)
+
+  async def test_finalize_worklist(self) -> None:
+    """finalize_worklist finalises a finished worklist, and does nothing without one."""
+    self.assertFalse(await self.driver.finalize_worklist())
+    self.assertNotIn("worklist_finalize", self.fake.names())
+    self.fake.status = "CompletedUnfinalizedWorklist"
+    self.assertTrue(await self.driver.finalize_worklist())
+    self.assertEqual(self.fake.status, "NoActiveWorklist")
+    self.fake.status = "RunningWorklist"
+    with self.assertRaises(WorklistActiveError):
+      await self.driver.finalize_worklist()
+
+  async def test_recover_unfinalized_run(self) -> None:
+    """recover_unfinalized_run downloads the file of a finished worklist, then finalises it."""
+    self.assertIsNone(await self.driver.recover_unfinalized_run())
+    self.plan(lose_completion=True)
+    worklist = acquiring_worklist()
+    self.fake.start_run(worklist)
+    assert self.fake.player is not None
+    await self.fake.player
+    self.assertEqual(self.fake.status, "CompletedUnfinalizedWorklist")
+    self.fake.calls.clear()
+    run = await self.driver.recover_unfinalized_run()
+    assert run is not None
+    self.assertEqual(run.events, self.data)
+    self.assertEqual((run.stream_event_count, run.stream_consistent), (0, False))
+    names = self.fake.names()
+    self.assertLess(names.index("worklist_get_current_fcs_file"), names.index("worklist_finalize"))
+    self.assertEqual(self.fake.status, "NoActiveWorklist")
+
+  async def test_recover_unfinalized_run_with_a_damaged_file(self) -> None:
+    """A file that fails its checks is not finalised; the error holds the bytes."""
+    self.plan(lose_completion=True, crc_offset=1)
+    self.fake.start_run(acquiring_worklist())
+    assert self.fake.player is not None
+    await self.fake.player
+    with self.assertLogs("pylabrobot.sartorius.ique.driver.master", logging.WARNING):
+      with self.assertRaises(EventDataError) as caught:
+        await self.driver.recover_unfinalized_run()
+    self.assertEqual(caught.exception.data, self.fake.fcs)
+    self.assertEqual(self.fake.status, "CompletedUnfinalizedWorklist")
 
   async def test_foreign_command(self) -> None:
     """Callbacks about another worklist's command stop the run."""
@@ -1444,13 +1598,37 @@ class StopTests(unittest.IsolatedAsyncioTestCase):
     self.assertIn("sampler_home", names)
     self.assertEqual(names[-1], "close")
 
-  async def test_stop_with_contact(self) -> None:
-    """A probe in contact cannot be parked; the session is closed all the same."""
+  async def test_stop_raises_the_probe_out_of_contact(self) -> None:
+    """stop raises the probe to the top and waits for its contact to clear before parking."""
     driver, fake = await set_up()
+    fake.position = [50.0, 60.0, 230.0]
     fake.contact = True
-    with self.assertRaises(UnsafeMotionError):
+
+    def raise_probe(z: decimal.Decimal) -> None:
+      """Raise the probe; up there it touches nothing."""
+      fake.position[2] = float(z)
+      fake.contact = False
+
+    fake.replies["sampler_move_z"] = raise_probe
+    await driver.stop()
+    names = fake.names()
+    self.assertEqual(fake.arguments("sampler_move_z"), (D("250.000"),))
+    self.assertLess(names.index("sampler_move_z"), names.index("sampler_home"))
+    self.assertFalse(fake.is_open)
+
+  async def test_stop_with_contact(self) -> None:
+    """A probe that stays in contact when raised is not parked, and the session stays open."""
+    driver, fake = await set_up()
+    driver.sampler.contact_clear_timeout = 0.05
+    fake.contact = True
+    with self.assertRaises(UnsafeMotionError) as caught:
       await driver.stop()
+    self.assertIn("still reports contact", str(caught.exception))
     self.assertNotIn("sampler_home", fake.names())
+    self.assertTrue(fake.is_open)
+    self.assertTrue(driver.is_set_up)
+    fake.contact = False
+    await driver.stop()
     self.assertFalse(fake.is_open)
 
 

@@ -22,14 +22,26 @@ bins, counted from the bin of the first event.
    matched in turn: its first well to a peak near where it is expected, the rest of the run
    moved along with it, and then every well to a peak overlapping the place it is expected at,
    following the drift between the two clocks from well to well.
+   With a measured transit delay (the time from the start of a well's sampling command to its
+   first events at the detector) the first well is placed where that delay predicts it, peaks
+   well before that are dropped instead of those in the first 20 s, and the first run is
+   matched from there; nothing is paired in order then.
 5. A well without a peak keeps the place timing predicts for it and is flagged; flagged wells
    between two found wells are spread evenly between them.
 6. Checks. Matching can put a well on another well's peak without flagging anything, so every
    found well is checked afterwards. Within a run, the start of a well on the event clock less
    the start of its sampling command is the same for every well, apart from slow drift and
    jitter; a well whose difference is far from the run's median fails the timing check. A
-   well whose peak is much narrower or wider than a sip fails the width check. Any failure
-   makes the verdict ask for a review.
+   well whose peak is much narrower or wider than a sip fails the width check.
+   Timing alone places a run only relative to its own peaks, so a whole run one or two wells
+   off keeps its spacing. Two checks name the wells of such runs. A run whose last well is
+   flagged while its first is found may be one well late (its first well empty, every well on
+   its neighbour's peak): its found wells fail ``run_shift``. And a run fails
+   ``ambiguous_anchor`` when sliding it by one or two sampling periods fits the events nearly as
+   well: when the windows it would move onto hold at least 90 % of the events of the windows it
+   would leave. An empty well at either end of a run makes both checks fail, since the events
+   cannot tell that run from a shifted one; the first run is exempt when a measured transit
+   delay placed it. Any failure makes the verdict ask for a review.
 
 The events of a well are those in its bins. Events arrive in time order, so they form one
 contiguous range of event indices.
@@ -41,13 +53,13 @@ import logging
 import math
 import statistics
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Dict, List, Literal, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
 Verdict = Literal["identified", "needs_review"]
 FirstWellOutcome = Literal["matched", "too_far", "no_peaks"]
-CheckName = Literal["timing", "width"]
+CheckName = Literal["timing", "width", "run_shift", "ambiguous_anchor"]
 
 # Width of a histogram bin, in seconds.
 BIN_WIDTH = 0.1
@@ -107,6 +119,17 @@ TIMING_TOLERANCE_FACTOR = 0.45
 # than the second of these multiples of the sip time.
 NARROW_WELL_FACTOR = 0.5
 WIDE_WELL_FACTOR = 1.65
+# A run's placement is ambiguous when sliding it by one of these numbers of sampling periods
+# moves it onto windows holding at least AMBIGUOUS_ANCHOR_FRACTION of the events of the windows
+# it leaves.
+ANCHOR_SHIFTS = (-2, -1, 1, 2)
+AMBIGUOUS_ANCHOR_FRACTION = 0.9
+# With a measured transit delay, peaks starting more than this many seconds before the first
+# well's predicted arrival are dropped.
+TRANSIT_DELAY_MARGIN = 5.0
+# ... and the first well takes a peak starting within this fraction of a sampling period of its
+# predicted arrival, or none.
+TRANSIT_ANCHOR_TOLERANCE = 0.5
 
 _PRIME_BINS = round(TUBING_TRANSIT_TIME / BIN_WIDTH)
 _BINS_PER_SECOND = round(1 / BIN_WIDTH)
@@ -149,7 +172,10 @@ class IdentifiedWell:
       the well.
     failed_checks: The checks a found well failed: ``timing`` when its start does not keep
       the spacing of the sampling commands of its run, ``width`` when the peak it took is much
-      narrower or wider than a sip. Flagged wells are not checked, so theirs is empty.
+      narrower or wider than a sip, ``run_shift`` when its run's last well has no peak while
+      its first has one, so the run may be a well late, ``ambiguous_anchor`` when its run fits
+      the events nearly as well one or two wells earlier or later. Flagged wells are not
+      checked, so theirs is empty.
   """
 
   well: str
@@ -878,7 +904,43 @@ def _match_following_wells(matching: _Matching, first: int, last: int) -> None:
       centre_missing_wells(spans, first, well)
 
 
-def _match_run(matching: _Matching, runs: Sequence[Tuple[int, int]], run_index: int) -> bool:
+def _match_first_well_at(
+  matching: _Matching, first: int, last: int, tolerance: float
+) -> FirstWellOutcome:
+  """Match the first well of a run that is placed where its arrival is predicted.
+
+  The candidates are the unused peaks that start within `tolerance` bins of the well's start;
+  without any, the well is flagged and the run stays where it is placed.
+
+  Returns:
+    ``matched`` when the well took a peak, the rest of the run moved as much as its midpoint;
+    ``too_far`` when no peak starts near the prediction; ``no_peaks`` when no unused peak is
+    left.
+  """
+  spans = matching.spans
+  span = spans[first]
+  if matching.next_peak >= len(matching.peaks):
+    return "no_peaks"
+  near = [
+    index
+    for index in range(matching.next_peak, len(matching.peaks))
+    if abs(matching.peaks[index].start - span.start) <= tolerance
+  ]
+  if not near:
+    span.flagged = True
+    return "too_far"
+  planned = span.midpoint
+  _take_best(matching, first, near)
+  _shift(spans[first + 1 : last + 1], span.midpoint - planned)
+  return "matched"
+
+
+def _match_run(
+  matching: _Matching,
+  runs: Sequence[Tuple[int, int]],
+  run_index: int,
+  placed_tolerance: Optional[float] = None,
+) -> bool:
   """Match one run of wells.
 
   When the first well is found and exactly as many kept peaks lie within the run as it has
@@ -887,6 +949,14 @@ def _match_run(matching: _Matching, runs: Sequence[Tuple[int, int]], run_index: 
   as that well's midpoint moved, so the next run starts from the clock offset this one ended
   with.
 
+  Args:
+    matching: The matching.
+    runs: The first and last well of every run.
+    run_index: The run.
+    placed_tolerance: When the run is placed where its arrival is predicted: how far, in bins,
+      its first well's peak may start from that place. None to find the first well's peak
+      near where timing expects it.
+
   Returns:
     False when no peak was left for the run: its wells and all later ones are flagged where
     they are expected, and matching is over.
@@ -894,7 +964,10 @@ def _match_run(matching: _Matching, runs: Sequence[Tuple[int, int]], run_index: 
   first, last = runs[run_index]
   spans = matching.spans
   planned_end = spans[last].midpoint
-  outcome = _match_first_well(matching, runs, run_index)
+  if placed_tolerance is None:
+    outcome = _match_first_well(matching, runs, run_index)
+  else:
+    outcome = _match_first_well_at(matching, first, last, placed_tolerance)
   if outcome == "no_peaks":
     for span in spans[first:]:
       span.flagged = True
@@ -908,18 +981,36 @@ def _match_run(matching: _Matching, runs: Sequence[Tuple[int, int]], run_index: 
   return True
 
 
-def _match_wells(matching: _Matching, runs: Sequence[Tuple[int, int]]) -> None:
+def _match_wells(
+  matching: _Matching,
+  runs: Sequence[Tuple[int, int]],
+  predicted: Optional[int] = None,
+  tolerance: float = 0.0,
+) -> None:
   """Move every well from its expected place onto its peak, or flag it.
 
-  With exactly one kept peak per well, wells and peaks are paired in order. Otherwise the
-  expected wells are anchored on the first peak and the runs are matched in turn.
+  Without a prediction: with exactly one kept peak per well, wells and peaks are paired in
+  order; otherwise the expected wells are anchored on the first peak and the runs are matched
+  in turn. With a prediction, the expected wells are placed so that the first starts at the
+  predicted bin, its peak is looked for within `tolerance` bins of it, and the runs are
+  matched in turn.
+
+  Args:
+    matching: The matching.
+    runs: The first and last well of every run.
+    predicted: The histogram bin where the first well's events are predicted to start, or None.
+    tolerance: How far from the prediction the first well's peak may start, in bins.
   """
-  if len(matching.peaks) == len(matching.spans):
-    _take_in_order(matching, 0, len(matching.spans) - 1)
-    return
-  anchor_on_first_peak(matching.spans, matching.peaks[0])
+  if predicted is None:
+    if len(matching.peaks) == len(matching.spans):
+      _take_in_order(matching, 0, len(matching.spans) - 1)
+      return
+    anchor_on_first_peak(matching.spans, matching.peaks[0])
+  else:
+    _shift(matching.spans, predicted - matching.spans[0].start)
   for run_index in range(len(runs)):
-    if not _match_run(matching, runs, run_index):
+    placed = tolerance if predicted is not None and run_index == 0 else None
+    if not _match_run(matching, runs, run_index, placed):
       return
 
 
@@ -1022,6 +1113,110 @@ def width_outliers(spans: Sequence[WellSpan], sip_bins: float) -> List[int]:
   return outliers
 
 
+def _found(spans: Sequence[WellSpan], first: int, last: int) -> List[int]:
+  """Return the indices of the found wells of a run."""
+  return [index for index in range(first, last + 1) if not spans[index].flagged]
+
+
+def run_shift_outliers(
+  spans: Sequence[WellSpan], runs: Sequence[Tuple[int, int]], exempt: Sequence[int] = ()
+) -> List[int]:
+  """Return the found wells of every run whose last well is flagged while its first is found.
+
+  Such a run may be one well late: with its first well empty, every well takes the next one's
+  peak and the last is left without one. The events alone cannot tell it from a run whose last
+  well is empty, so the whole run is named.
+
+  Args:
+    spans: Where matching put the wells.
+    runs: The first and last well of each run.
+    exempt: Indices of runs not to check, such as a run placed by a measured transit delay.
+
+  Returns:
+    The indices of the wells that fail, in sampling order.
+  """
+  outliers: List[int] = []
+  for run_index, (first, last) in enumerate(runs):
+    if run_index in exempt:
+      continue
+    if spans[last].flagged and not spans[first].flagged:
+      outliers += _found(spans, first, last)
+  return outliers
+
+
+def _events_in(counts: Sequence[int], low: int, high: int) -> int:
+  """Return the events in bins low to high, both included; bins outside hold none."""
+  return sum(counts[max(low, 0) : max(min(high + 1, len(counts)), 0)])
+
+
+def _window_events(counts: Sequence[int], starts: Sequence[int], shift: int, width: int) -> int:
+  """Return the events in windows of `width` bins starting at `starts`, moved by `shift`."""
+  return sum(_events_in(counts, start + shift, start + shift + width - 1) for start in starts)
+
+
+def _period_bins(wells: Sequence[SampledWell], first: int, last: int) -> int:
+  """Return a run's sampling period: the median length of its sampling commands, in bins."""
+  lengths = [
+    bin_of(wells[index].end) - bin_of(wells[index].start) for index in range(first, last + 1)
+  ]
+  return max(int(statistics.median(lengths)), 1)
+
+
+def ambiguous_runs(
+  counts: Sequence[int],
+  wells: Sequence[SampledWell],
+  planned: Sequence[int],
+  spans: Sequence[WellSpan],
+  runs: Sequence[Tuple[int, int]],
+  sip_bins: float,
+  exempt: Sequence[int] = (),
+) -> List[int]:
+  """Return the found wells of every run that fits the events nearly as well slid by one or
+  two sampling periods.
+
+  A run's windows are its wells' sip windows as the command log spaces them, placed where
+  matching put the run (by the median offset of its found wells). Sliding the run by `k`
+  periods (each of :data:`ANCHOR_SHIFTS`) moves `k` windows off one end and `k` onto the other;
+  the windows in between stay. The run is ambiguous when the windows it would move onto hold at
+  least :data:`AMBIGUOUS_ANCHOR_FRACTION` of the events of the windows it would leave. A run
+  with an empty well at an end is always ambiguous: nothing tells it from the shifted run.
+
+  Args:
+    counts: The histogram.
+    wells: The sampled wells.
+    planned: The first bin of every well as the command log places it, before matching.
+    spans: Where matching put the wells.
+    runs: The first and last well of each run.
+    sip_bins: The sip time in bins.
+    exempt: Indices of runs not to check.
+
+  Returns:
+    The indices of the wells that fail, in sampling order.
+  """
+  width = max(int(round(sip_bins)), 1)
+  outliers: List[int] = []
+  for run_index, (first, last) in enumerate(runs):
+    found = _found(spans, first, last)
+    if run_index in exempt or not found:
+      continue
+    offset = int(statistics.median(spans[index].start - planned[index] for index in found))
+    period = _period_bins(wells, first, last)
+    starts = [planned[index] + offset for index in range(first, last + 1)]
+    for shift in ANCHOR_SHIFTS:
+      moved = abs(shift)
+      if moved >= len(starts):
+        continue
+      leaving, arriving = (
+        (starts[:moved], starts[-moved:]) if shift > 0 else (starts[-moved:], starts[:moved])
+      )
+      onto = _window_events(counts, arriving, shift * period, width)
+      off = _window_events(counts, leaving, 0, width)
+      if onto >= AMBIGUOUS_ANCHOR_FRACTION * off:
+        outliers += found
+        break
+  return outliers
+
+
 def _failed_checks(
   wells: Sequence[SampledWell],
   matching: _Matching,
@@ -1029,8 +1224,10 @@ def _failed_checks(
   offset: int,
   sip_time: float,
   up_time: float,
+  planned: Sequence[int],
+  exempt: Sequence[int],
 ) -> List[Tuple[CheckName, ...]]:
-  """Return, for every well, the checks it failed: ``timing``, ``width``, both or none.
+  """Return, for every well, the checks it failed.
 
   Args:
     wells: The sampled wells.
@@ -1039,18 +1236,22 @@ def _failed_checks(
     offset: The bin number of the histogram's first bin.
     sip_time: The sip time, in seconds.
     up_time: The up time, in seconds.
+    planned: The first bin of every well as the command log places it, before matching.
+    exempt: Indices of runs placed by a measured transit delay, which the run checks leave out.
   """
-  timing = set(timing_outliers(wells, matching.spans, runs, offset, sip_time, up_time))
-  width = set(width_outliers(matching.spans, matching.sip_bins))
-  checks: List[Tuple[CheckName, ...]] = []
-  for index in range(len(wells)):
-    failed: List[CheckName] = []
-    if index in timing:
-      failed.append("timing")
-    if index in width:
-      failed.append("width")
-    checks.append(tuple(failed))
-  return checks
+  spans = matching.spans
+  failures: Dict[CheckName, Set[int]] = {
+    "timing": set(timing_outliers(wells, spans, runs, offset, sip_time, up_time)),
+    "width": set(width_outliers(spans, matching.sip_bins)),
+    "run_shift": set(run_shift_outliers(spans, runs, exempt)),
+    "ambiguous_anchor": set(
+      ambiguous_runs(matching.counts, wells, planned, spans, runs, matching.sip_bins, exempt)
+    ),
+  }
+  return [
+    tuple(name for name, indices in failures.items() if index in indices)
+    for index in range(len(wells))
+  ]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1148,55 +1349,136 @@ def _check_inputs(wells: Sequence[SampledWell], sip_time: float, up_time: float)
     previous_start = well.start
 
 
+def _check_transit(transit_delay: Optional[float], acquisition_start: Optional[float]) -> None:
+  """Check the transit delay arguments of :func:`identify_wells`.
+
+  Raises:
+    ValueError: If only one of them is given, or one is not a finite number, or the transit
+      delay is not positive.
+  """
+  if transit_delay is None:
+    return
+  if acquisition_start is None:
+    raise ValueError("a transit delay needs the acquisition start on the command-log clock")
+  if not (math.isfinite(transit_delay) and transit_delay > 0):
+    raise ValueError(f"the transit delay must be positive, not {transit_delay}")
+  if not math.isfinite(acquisition_start):
+    raise ValueError(f"the acquisition start is not a number: {acquisition_start}")
+
+
+def _placed_first_run(
+  matching: _Matching,
+  planned: Sequence[int],
+  runs: Sequence[Tuple[int, int]],
+  shift: int,
+  tolerance: float,
+) -> bool:
+  """Return whether the transit delay placed the first run beyond doubt: its found wells lie
+  where it predicted them, and no substantial peak comes before its first found well.
+
+  Such a peak, within the margin before the prediction, is what a well looks like when the
+  transit delay is a sampling period too long; the run is then checked as any other.
+
+  Args:
+    matching: The finished matching.
+    planned: The first bin of every well as the command log places it.
+    runs: The first and last well of each run.
+    shift: How far the prediction moved the planned wells, in bins.
+    tolerance: How far a found well may lie from its prediction, in bins.
+  """
+  spans = matching.spans
+  first, last = runs[0]
+  found = _found(spans, first, last)
+  if not found:
+    return False
+  deviations = [abs(spans[index].start - planned[index] - shift) for index in found]
+  if statistics.median(deviations) > tolerance:
+    return False
+  substantial = SUBSTANTIAL_PEAK_FRACTION * matching.averages.event_count
+  start = spans[found[0]].start
+  return not any(peak.end < start and peak.event_count > substantial for peak in matching.peaks)
+
+
 def identify_wells(
   event_times: Sequence[float],
   wells: Sequence[SampledWell],
   sip_time: float,
   up_time: float,
+  *,
+  transit_delay: Optional[float] = None,
+  acquisition_start: Optional[float] = None,
 ) -> WellIdentification:
   """Assign the events of a plate read to its wells.
 
   Args:
     event_times: The time of every event in seconds since the acquisition started, in the
       order the events arrived (which is time order).
-    wells: The sampled wells in sampling order, from the completed command log. Their times
-      may be on any clock; only their spacing is used.
+    wells: The sampled wells in sampling order, from the completed command log. Without a
+      transit delay their times may be on any clock; only their spacing is used.
     sip_time: How long the probe draws from a well, in seconds.
     up_time: How long the probe then stays raised in air, in seconds.
+    transit_delay: A measured time, in seconds, from the start of a well's sampling command to
+      its first events at the detector; None when it is not known. Given, the first well is
+      placed where it predicts the first well's events, and peaks starting more than
+      :data:`TRANSIT_DELAY_MARGIN` before that are dropped instead of those of the first 20 s.
+    acquisition_start: When recording started on the clock of `wells` (the command log), in
+      seconds; needed with `transit_delay`.
 
   Returns:
     One entry per well, in the order given, and a verdict. Wells without events of their own
     are flagged and placed where timing predicts them; found wells whose start or width
-    disagrees with the sampler's timing carry the checks they failed. Any flagged well or
-    failed check makes the verdict ``needs_review``.
+    disagrees with the sampler's timing, or whose run may be shifted, carry the checks they
+    failed. Any flagged well or failed check makes the verdict ``needs_review``.
 
   Raises:
     WellIdentificationError: If the events hold no usable peak (too few events), or their
       times are negative or go backwards.
-    ValueError: If the wells or times given are unusable.
+    ValueError: If the wells or times given are unusable, or a transit delay is given without
+      the acquisition start.
   """
   _check_inputs(wells, sip_time, up_time)
+  _check_transit(transit_delay, acquisition_start)
   histogram = time_histogram(event_times)
   sip_bins = round(sip_time / BIN_WIDTH, 6)
   up_bins = round(up_time / BIN_WIDTH, 6)
-  peaks = drop_prime_noise(find_peaks(histogram.counts, sip_bins, up_bins), histogram.offset)
+  found_peaks = find_peaks(histogram.counts, sip_bins, up_bins)
+  predicted: Optional[int] = None
+  if transit_delay is None or acquisition_start is None:
+    peaks = drop_prime_noise(found_peaks, histogram.offset)
+  else:
+    arrival = wells[0].start - acquisition_start + transit_delay
+    predicted = bin_of(arrival) - histogram.offset
+    earliest = bin_of(arrival - TRANSIT_DELAY_MARGIN) - histogram.offset
+    peaks = [peak for peak in found_peaks if peak.start >= earliest]
   if not peaks:
     raise WellIdentificationError("not enough event data to identify wells")
   kept, removed = select_peaks(peaks, len(wells))
   if not kept:
     raise WellIdentificationError("not enough event data to identify wells")
+  spans = expected_spans(wells, up_time)
+  planned = [span.start for span in spans]
   matching = _Matching(
     counts=histogram.counts,
     peaks=kept,
     removed=removed,
     averages=peak_averages(kept),
-    spans=expected_spans(wells, up_time),
+    spans=spans,
     sip_bins=sip_bins,
     up_bins=up_bins,
   )
   runs = sampling_runs(wells)
-  _match_wells(matching, runs)
-  checks = _failed_checks(wells, matching, runs, histogram.offset, sip_time, up_time)
+  exempt: List[int] = []
+  if predicted is None:
+    _match_wells(matching, runs)
+  else:
+    tolerance = TRANSIT_ANCHOR_TOLERANCE * _period_bins(wells, *runs[0])
+    shift = predicted - planned[0]
+    _match_wells(matching, runs, predicted, tolerance)
+    if _placed_first_run(matching, planned, runs, shift, tolerance):
+      exempt.append(0)
+  checks = _failed_checks(
+    wells, matching, runs, histogram.offset, sip_time, up_time, planned, exempt
+  )
   events_before = events_before_bins(histogram.counts)
   return _outcome(
     [

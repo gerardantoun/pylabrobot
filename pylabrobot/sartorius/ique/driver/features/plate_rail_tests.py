@@ -5,6 +5,7 @@ import unittest
 
 from pylabrobot.sartorius.ique.driver.errors import (
   DeviceFaultedError,
+  DeviceNotReadyError,
   UnsafeMotionError,
   WorklistActiveError,
   WorklistCancelledError,
@@ -68,13 +69,35 @@ class PlateRailTests(unittest.IsolatedAsyncioTestCase):
       await self.rail.load()
     self.assertNotIn("plate_rail_load", self.names())
 
-  async def test_faulted_device_refuses(self) -> None:
-    """The rail does not move while a mechanical device is faulted."""
+  async def test_faulted_device_refuses_a_load(self) -> None:
+    """The rail does not move in while a mechanical device is faulted; it still moves out, as a
+    faulted pump or shaker must not keep the plate inside."""
+    await self.rail.load()
     self.controller.fault_device("Pump", "Start Faulted")
+    self.controller.fault_device("Shaker", "Plate lock closed itself")
+    await self.rail.eject()
+    self.assertEqual(self.controller.rail_position, "ejected")
     with self.assertRaises(DeviceFaultedError):
       await self.rail.load()
-    with self.assertRaises(DeviceFaultedError):
+
+  async def test_faulted_sampler_refuses_an_eject(self) -> None:
+    """With the sampler faulted the probe's position is not known, so the rail stays."""
+    await self.rail.load()
+    self.controller.fault_device("Sampler", "Move Z Faulted")
+    with self.assertRaises(DeviceNotReadyError):
       await self.rail.eject()
+    self.assertNotIn("plate_rail_eject", self.names())
+
+  async def test_not_while_shaking(self) -> None:
+    """The rail does not move while the shaker shakes."""
+    await self.rail.load()
+    await self.driver.shaker.start(1000)
+    with self.assertRaises(UnsafeMotionError) as caught:
+      await self.rail.eject()
+    self.assertIn("shaker", str(caught.exception))
+    self.assertNotIn("plate_rail_eject", self.names())
+    await self.driver.shaker.stop()
+    await self.rail.eject()
 
   async def test_rail_fault_forgets_the_position(self) -> None:
     """A faulted rail has no known position and does not move."""

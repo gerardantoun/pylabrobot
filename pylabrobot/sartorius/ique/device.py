@@ -19,7 +19,7 @@ import datetime
 import logging
 import pathlib
 from dataclasses import dataclass
-from typing import Callable, List, Literal, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Coroutine, List, Literal, Optional, Sequence, Tuple, Union
 
 from pylabrobot.resources import Coordinate, Plate, PlateHolder, Resource, Well
 from pylabrobot.sartorius.ique.driver.calibration import (
@@ -31,14 +31,13 @@ from pylabrobot.sartorius.ique.driver.calibration import (
   deck_height_test_point,
   format_well_name,
   parse_well_name,
-  with_deck_height,
-  write_calibration,
+  patch_deck_height,
 )
 from pylabrobot.sartorius.ique.driver.contract import (
   CombinedShakeRinseCommand,
   ContactToleranceType,
   FlowCytometerAcquireCommand,
-  FlushCommand,
+  SampleWellCommand,
   StartShakerCommand,
   Worklist,
 )
@@ -71,12 +70,15 @@ from pylabrobot.sartorius.ique.driver.worklist import (
   PlateReadSettings,
   TubeReadSettings,
   WellOrder,
+  cleaning_skipped,
   deck_height_validation_worklist,
   fluidics_check_worklist,
   flush_target,
+  line_flushed,
   plate_read_worklist,
   prime_worklist,
   probe_and_tubing_clean_worklist,
+  sample_left_in_line,
   shutdown_worklist,
   startup_worklist,
   tube_read_worklist,
@@ -97,10 +99,6 @@ PLATE_HOLDER_SIZE_Y = 85.48
 
 PRIME_DURATION = 60.0
 """Seconds of the default prime: enough to clear sample a stopped read left in the line."""
-CONTACT_CLEAR_TIMEOUT = 2.0
-"""Seconds the contact sensor may take to clear once the probe is raised."""
-CONTACT_POLL_INTERVAL = 0.1
-"""Seconds between contact sensor reads while waiting for it to clear."""
 
 ReadKind = Literal["plate", "tube"]
 
@@ -192,11 +190,26 @@ class _ActiveRead:
 
   Attributes:
     kind: A plate read or a tube read.
-    stop_requested: Whether a plate read was asked to stop early.
+    stop_requested: Whether the read was asked to stop early.
   """
 
   kind: ReadKind
   stop_requested: bool = False
+
+
+@dataclass(frozen=True)
+class RecoveredRun:
+  """A finished worklist the controller held unfinalised, collected and then finalised.
+
+  Attributes:
+    run: The run as the controller recorded it, with the events of its FCS file when it has
+      one.
+    plate_read: When the worklist was a plate read of this driver and its settings were given,
+      the read rebuilt from it; otherwise None.
+  """
+
+  run: CompletedRun
+  plate_read: Optional[PlateRead] = None
 
 
 def _plate_format_of(plate: Plate) -> PlateFormat:
@@ -215,55 +228,66 @@ def _plate_format_of(plate: Plate) -> PlateFormat:
   )
 
 
-def _plate_models_for(calibration: Calibration, plate_format: PlateFormat) -> List[str]:
-  """Return the names of the plate models a plate of a format can be read with.
-
-  That is a model mapped for the format, or one with a taught depth and no map, which holds for
-  every format.
-  """
-  names = []
-  for model in calibration.plate_models:
-    if model.depth_map is not None:
-      if model.depth_map.plate_format == plate_format:
-        names.append(model.name)
-    elif model.is_calibrated:
-      names.append(model.name)
-  return names
+def _mapped_models(calibration: Calibration, plate_format: PlateFormat) -> List[str]:
+  """Return the names of the plate models mapped for a format."""
+  return [
+    model.name
+    for model in calibration.plate_models
+    if model.depth_map is not None and model.depth_map.plate_format == plate_format
+  ]
 
 
 def _resolve_plate_model(
-  calibration: Calibration, plate_format: PlateFormat, plate_model: Optional[str]
+  calibration: Calibration,
+  plate_format: PlateFormat,
+  plate_model: Optional[str],
+  resource_model: Optional[str],
 ) -> str:
-  """Return the plate model to read with: the one given, or the only one calibrated.
+  """Return the plate model to read with.
+
+  It must be named: as `plate_model`, or as the plate resource's model when that is the name
+  of a model mapped for the format. A named model must be mapped for the format, or have a
+  taught depth; the calibration does not record which format a taught depth is for, so such a
+  model is taken only when it is named as `plate_model`.
 
   Raises:
-    ValueError: No model is given and several are calibrated for the format.
-    CalibrationMissingError: None is calibrated for the format, or the one given is unknown or
-      not calibrated for it.
+    ValueError: No plate model is named.
+    CalibrationMissingError: The model named is unknown, mapped for another format, or neither
+      mapped nor taught.
   """
-  candidates = _plate_models_for(calibration, plate_format)
+  mapped = _mapped_models(calibration, plate_format)
   if plate_model is None:
-    if len(candidates) == 1:
-      return candidates[0]
-    if not candidates:
-      raise CalibrationMissingError(
-        f"no plate model of the instrument's calibration is mapped for {plate_format}"
-      )
+    if resource_model is not None and resource_model in mapped:
+      return resource_model
     raise ValueError(
-      f"several plate models are calibrated for {plate_format}: {', '.join(candidates)}; "
-      "choose one with plate_model"
+      f"name the plate model of the calibration the plate is read with: plate_model=...; "
+      f"mapped for {plate_format}: {', '.join(mapped) or 'none'}. The plate resource's model "
+      f"{resource_model!r} is not one of them"
     )
-  if plate_model not in candidates:
-    known = [model.name for model in calibration.plate_models]
-    if plate_model not in known:
-      raise CalibrationMissingError(
-        f"the instrument's calibration has no plate model {plate_model!r}; it has "
-        f"{', '.join(known) or 'none'}"
-      )
+  models = {model.name: model for model in calibration.plate_models}
+  if plate_model not in models:
     raise CalibrationMissingError(
-      f"plate model {plate_model!r} is not calibrated for {plate_format}; calibrated for it: "
-      f"{', '.join(candidates) or 'none'}"
+      f"the instrument's calibration has no plate model {plate_model!r}; it has "
+      f"{', '.join(models) or 'none'}"
     )
+  model = models[plate_model]
+  if model.depth_map is not None:
+    if model.depth_map.plate_format != plate_format:
+      raise CalibrationMissingError(
+        f"plate model {plate_model!r} is mapped for {model.depth_map.plate_format}, not "
+        f"{plate_format}; mapped for {plate_format}: {', '.join(mapped) or 'none'}"
+      )
+    return plate_model
+  if not model.is_calibrated:
+    raise CalibrationMissingError(
+      f"plate model {plate_model!r} has neither a depth map nor a taught depth on this instrument"
+    )
+  logger.warning(
+    "plate model %r has a taught depth and no depth map; it is used for %s because it was "
+    "named, but the calibration does not record which format the depth is for",
+    plate_model,
+    plate_format,
+  )
   return plate_model
 
 
@@ -279,15 +303,61 @@ def _from_calibration(build: Callable[[], Worklist]) -> Worklist:
     raise CalibrationMissingError(f"the instrument's calibration is incomplete: {error}") from error
 
 
-def _sample_left_in_line(worklist: Worklist) -> bool:
-  """Return whether a plate read ended after recording started and before its flush ended."""
-  recording = False
+def _same_worklist(reported: Optional[Worklist], sent: Worklist) -> bool:
+  """Return whether the controller's worklist is the one sent: the same commands."""
+  if reported is None:
+    return False
+  ids = [command.id for command in reported.commands or [] if command is not None]
+  return ids == [command.id for command in sent.commands or [] if command is not None]
+
+
+def _check_sampling(worklist: Worklist, settings: PlateReadSettings) -> None:
+  """Check that settings sample as a worklist's sampling commands did.
+
+  Raises:
+    ValueError: The sip or up time differs from that of a sampling command.
+  """
+  sip, up = round(settings.sip_time * 1000), round(settings.up_time * 1000)
   for command in worklist.commands or []:
-    if isinstance(command, FlowCytometerAcquireCommand) and command.completed:
-      recording = True
-    if isinstance(command, FlushCommand):
-      return recording and not command.completed
-  return recording
+    if type(command) is SampleWellCommand and (command.sip_time, command.up_time) != (sip, up):
+      raise ValueError(
+        f"the settings sample {sip} ms and wait {up} ms up; the worklist's sampling commands "
+        f"sample {command.sip_time} ms and wait {command.up_time} ms"
+      )
+
+
+def _only_cleaning_skipped(error: WorklistFailedError) -> bool:
+  """Return whether a read failed only because commands after its completed flush were skipped,
+  as when a skip to the flush reaches the controller after the flush started."""
+  worklist = error.run.worklist
+  commands = [command for command in worklist.commands or [] if command is not None]
+  return (
+    error.stop_reason == "Unspecified"
+    and not error.error
+    and cleaning_skipped(worklist)
+    and all(command.completed or command.execution_notes == "Skipped" for command in commands)
+  )
+
+
+async def _finish(work: Coroutine[Any, Any, None]) -> None:
+  """Run work to its end even when the calling task is cancelled meanwhile, then let the
+  cancellation through.
+
+  Raises:
+    asyncio.CancelledError: The calling task was cancelled while the work ran.
+  """
+  task = asyncio.ensure_future(work)
+  cancelled = False
+  while not task.done():
+    try:
+      await asyncio.shield(task)
+    except asyncio.CancelledError:
+      if task.done():
+        raise
+      cancelled = True
+  task.result()
+  if cancelled:
+    raise asyncio.CancelledError()
 
 
 class IQueDevice(Resource):
@@ -297,6 +367,11 @@ class IQueDevice(Resource):
 
   The resource is the instrument without its computer and UPS. Where the plate holder sits
   within it is not known; the holder is placed at the instrument's origin.
+
+  Every operation that runs a worklist takes ``finalize_previous``: the controller runs no
+  worklist while it holds a finished one that was not finalised, as it does after it
+  restarted. Pass True to finalise it first, or see :meth:`finalize_worklist` and
+  :meth:`recover_unfinalized_run`.
 
   Build one with the :func:`IQue` factory.
   """
@@ -385,9 +460,9 @@ class IQueDevice(Resource):
 
   @property
   def flush_needed(self) -> bool:
-    """Whether the last plate read stopped with sample in the line, after recording started and
-    before its flush ended. A prime, a probe and tubing clean, start-up or a completed plate
-    read clears it."""
+    """Whether the last read left sample in the line (it stopped after recording started and
+    before its flush ended, however it stopped), or its probe cleans were skipped. A prime, a
+    probe and tubing clean, start-up or a read that flushed and cleaned clears it."""
     return self._flush_needed
 
   async def setup(self, *, require_calibration: bool = True) -> None:
@@ -400,12 +475,81 @@ class IQueDevice(Resource):
     await self.driver.setup(require_calibration=require_calibration)
 
   async def stop(self, *, cancel: bool = False) -> None:
-    """Stop the pump and the shaker, park the probe and disconnect (``IQueDriver.stop``).
+    """Stop the pump and the shaker, raise and park the probe and disconnect
+    (``IQueDriver.stop``). The session stays open when the probe stays in contact.
 
     Args:
       cancel: Cancel a running worklist first instead of refusing.
     """
     await self.driver.stop(cancel=cancel)
+
+  async def finalize_worklist(self) -> bool:
+    """Finalise the finished worklist the controller holds, so that another can run; its events
+    are not downloaded (:meth:`recover_unfinalized_run` downloads them first).
+
+    Returns:
+      Whether there was one to finalise.
+
+    Raises:
+      WorklistActiveError: A worklist runs.
+    """
+    return await self.driver.finalize_worklist()
+
+  async def recover_unfinalized_run(
+    self, settings: Optional[PlateReadSettings] = None
+  ) -> Optional[RecoveredRun]:
+    """Collect the finished, unfinalised worklist the controller holds, then finalise it.
+
+    The controller holds one after a session ended while a read ran, and after it restarted.
+    Its FCS file is downloaded when it recorded events. When it was a plate read of this driver,
+    the read is rebuilt from it with `settings`, which must be those it was read with (the sip
+    and up times are checked against its sampling commands); the plate format and model come
+    from the worklist. Whether it left sample in the line updates :attr:`flush_needed`.
+
+    Args:
+      settings: The settings of the plate read, to rebuild it; None to collect the run only.
+
+    Returns:
+      The run and the rebuilt read, or None when the controller holds no finished worklist.
+
+    Raises:
+      WorklistActiveError: A worklist runs.
+      EventDataError: The FCS file is inconsistent; the worklist is not finalised then.
+      ValueError: `settings` disagree with the worklist's sampling commands; nothing is
+        finalised then.
+      WellIdentificationFailedError: The rebuilt read's events cannot be assigned to wells; the
+        worklist is finalised, and the error holds the run.
+    """
+    driver = self.driver
+    if settings is not None and await driver.call(driver.client.worklist_get_status) == (
+      "CompletedUnfinalizedWorklist"
+    ):
+      held = await driver.call(driver.client.worklist_get_current)
+      if held is not None:
+        _check_sampling(held, settings)
+    run = await driver.recover_unfinalized_run()
+    if run is None:
+      return None
+    self._note_line(run.worklist)
+    worklist = run.worklist
+    sampling = [command for command in run.commands if type(command) is SampleWellCommand]
+    plate_format = worklist.plate_number
+    if not sampling or worklist.experiment_name is None or plate_format not in PLATE_FORMATS:
+      return RecoveredRun(run)
+    if settings is None:
+      logger.warning(
+        "the recovered worklist was a plate read; pass its settings to rebuild the read"
+      )
+      return RecoveredRun(run)
+    _check_sampling(worklist, settings)
+    plate_read = plate_read_from_run(
+      run,
+      plate_format=PLATE_FORMATS[PLATE_FORMATS.index(plate_format)],
+      plate_model=worklist.experiment_name,
+      settings=settings,
+      stopped_early=not worklist.all_commands_completed,
+    )
+    return RecoveredRun(run, plate_read)
 
   # -------------------------------------------------------------------------------------------
   # Checks before a worklist
@@ -518,6 +662,49 @@ class IQueDevice(Resource):
     await self._require_no_contact(action)
 
   # -------------------------------------------------------------------------------------------
+  # The sample line
+  # -------------------------------------------------------------------------------------------
+
+  def _note_line(self, ended: Worklist) -> None:
+    """Record what a read or maintenance run that ended left in the sample line.
+
+    Sample is left when recording started and the flush did not complete; the probe is dirty
+    when the cleans after a completed flush were skipped. Either sets :attr:`flush_needed`; a
+    completed flush and cleans clear it; a run that neither recorded nor flushed leaves it.
+    """
+    if sample_left_in_line(ended):
+      self._flush_needed = True
+      logger.warning(
+        "the read stopped with sample in the line; prime() flushes it, or set pre_plate_prime"
+      )
+    elif cleaning_skipped(ended):
+      self._flush_needed = True
+      logger.warning(
+        "the line was flushed but the probe cleans after the flush were skipped; run "
+        "clean_probe_and_tubing() before the next read"
+      )
+    elif line_flushed(ended):
+      self._flush_needed = False
+
+  async def _note_line_of(self, sent: Worklist, ended: Optional[Worklist]) -> None:
+    """Record what a read left in the sample line, reading its worklist from the controller
+    when the run did not hand it back. When the session is closed it is not known, and a flush
+    counts as needed; when the controller never ran the read, nothing changes."""
+    if ended is None:
+      if not self.driver.client.is_open:
+        self._flush_needed = True
+        logger.warning(
+          "whether the read left sample in the line is not known; prime() before the next read"
+        )
+        return
+      reported = await self.driver.call(self.driver.client.worklist_get_current)
+      if not _same_worklist(reported, sent):
+        return
+      assert reported is not None
+      ended = reported
+    self._note_line(ended)
+
+  # -------------------------------------------------------------------------------------------
   # Reads
   # -------------------------------------------------------------------------------------------
 
@@ -598,6 +785,7 @@ class IQueDevice(Resource):
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
     allow_warnings: bool = False,
+    finalize_previous: bool = False,
   ) -> PlateRead:
     """Read a plate: sample its wells one after another into one acquisition, then assign the
     events to the wells.
@@ -608,13 +796,19 @@ class IQueDevice(Resource):
     event stream by the times of their sampling commands; a result whose verdict is
     ``needs_review`` is logged as a warning.
 
+    The plate model must be named: the probe samples each well at the height its model's depth
+    map gives, and a plate of another model may have its well bottoms higher. Name it with
+    `plate_model`, or give the plate resource the model's name as its ``model``.
+
     Before anything is sent the read is checked: the plate is on the plate holder; the
-    calibration is for this instrument's system kind, maps the plate model, and holds the plate
-    format's corners, the stations and the deck height; the instrument reads the plate format;
-    the shaker reaches the read's speeds; no worklist runs; the detector is ready to run; the
-    plate rail is ready and its position known; the probe reports no contact. When the last
-    plate read left sample in the line and `settings` do not prime first, a warning suggests
-    :meth:`prime`.
+    calibration is for this instrument's system kind, holds the plate model mapped for the
+    format, the plate format's corners, the stations and the deck height; no well is sampled
+    below the deck height; the instrument reads the plate format; the shaker reaches the read's
+    speeds; no worklist runs; the detector is ready to run; the plate rail is ready and its
+    position known; the probe reports no contact. When the last read left sample in the line
+    and `settings` do not prime first, a warning suggests :meth:`prime`.
+
+    However the read ends, :attr:`flush_needed` records whether it left sample in the line.
 
     Args:
       plate: The plate, which must be on :attr:`plate_holder`; its format follows from its grid
@@ -626,30 +820,31 @@ class IQueDevice(Resource):
       order: The order to sample them in (``row``, ``serpentine_row``, ``column``,
         ``serpentine_column``); None to sample `wells` in the order given.
       settings: How to read.
-      plate_model: The calibration's plate model of the plate; None for the only model
-        calibrated for the format.
+      plate_model: The calibration's plate model of the plate; None to use the plate resource's
+        model, which must then be the name of a model mapped for the format.
       metadata: (key, value) pairs the instrument writes into its FCS file as ``IC$<key>``.
       on_progress: Called for every command of the worklist that starts or ends.
       timeout: Seconds after which the read is cancelled; None waits as long as it takes.
       allow_warnings: Read although devices report warnings.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The read. After :meth:`stop_read_early` it holds the wells sampled until then.
 
     Raises:
-      ValueError: An argument is invalid or does not suit the plate or the instrument, or
-        several plate models are calibrated for the format and none is chosen.
+      ValueError: An argument is invalid or does not suit the plate or the instrument, no plate
+        model is named, or a well would be sampled below the deck height.
       PlateAccessError: The plate is not on the plate holder, or the rail's position is not
         known.
       CalibrationMissingError: The calibration lacks something the read needs.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceFaultedError: A device is faulted.
       DeviceNotReadyError: The detector or another device is not ready.
       UnsafeMotionError: The probe reports contact.
       WorklistFailedError: The read did not complete; the error holds the partial run
         (``WorklistCancelledError`` when it was cancelled, ``WorklistTimeoutError`` after
         `timeout`).
-      EventDataError: The event data is missing or inconsistent.
+      EventDataError: The event data is missing or inconsistent; the error holds the run.
       WellIdentificationFailedError: The events cannot be assigned to wells; the error holds the
         run.
     """
@@ -660,7 +855,8 @@ class IQueDevice(Resource):
     resolved = self._plate_format(plate, plate_format)
     names = self._well_names(plate, resolved, wells, order)
     calibration = self._calibration()
-    model = _resolve_plate_model(calibration, resolved, plate_model)
+    resource_model = None if plate is None else plate.model
+    model = _resolve_plate_model(calibration, resolved, plate_model, resource_model)
     tolerance = await self._contact_tolerance("DeckHeightValidation")
     worklist = _from_calibration(
       lambda: plate_read_worklist(
@@ -676,25 +872,36 @@ class IQueDevice(Resource):
     await self._require_plate_read_possible(worklist, resolved)
     if self._flush_needed and not settings.pre_plate_prime:
       logger.warning(
-        "the last plate read stopped with sample in the line; prime() before reading, or set "
+        "the last read left sample in the line; prime() before reading, or set "
         "pre_plate_prime in the settings, to keep it out of this plate's first wells"
       )
     what = plate.name if plate is not None else f"a {resolved} plate"
     logger.info("reading %s: %d wells with plate model %r", what, len(names), model)
     read = _ActiveRead("plate")
     self._read = read
+    ended: Optional[Worklist] = None
     try:
-      run = await driver.run_worklist(
-        worklist, on_progress=on_progress, timeout=timeout, allow_warnings=allow_warnings
-      )
-    except WorklistFailedError as error:
-      if _sample_left_in_line(error.run.worklist):
-        self._flush_needed = True
-        logger.warning("the plate read stopped with sample in the line; prime() flushes it")
-      raise
+      try:
+        run = await driver.run_worklist(
+          worklist,
+          on_progress=on_progress,
+          timeout=timeout,
+          allow_warnings=allow_warnings,
+          finalize_previous=finalize_previous,
+        )
+      except WorklistFailedError as error:
+        ended = error.run.worklist
+        if not (read.stop_requested and _only_cleaning_skipped(error)):
+          raise
+        logger.warning(
+          "the read stopped early, and the skip to its flush reached the instrument after the "
+          "flush started: the cleans after it were skipped"
+        )
+        run = error.run
+      ended = run.worklist
     finally:
       self._read = None
-    self._flush_needed = False
+      await _finish(self._note_line_of(worklist, ended))
     result = plate_read_from_run(
       run,
       plate_format=resolved,
@@ -714,11 +921,15 @@ class IQueDevice(Resource):
 
     A plate read that records events skips to its flush: the well being sampled is finished,
     the wells after it are skipped, and the line is flushed and the probe cleaned as at the end
-    of every read; :meth:`read_plate` then returns the wells sampled until then. A plate read
-    that has not started recording, and a tube read, are cancelled instead, and their read
-    raises ``WorklistCancelledError``. Nothing is done when no read runs, or when the plate
-    read already flushes. The method returns once the controller has the request; the read
-    returns when the instrument has finished.
+    of every read; :meth:`read_plate` then returns the wells sampled until then. A tube read
+    that records skips to its flush in the same way; a draw from the tube that runs is not cut
+    short. A read that has not started recording is cancelled instead, and raises
+    ``WorklistCancelledError``.
+
+    Nothing is sent when no read runs, when the read flushes already, or when its flush is the
+    next command: the read reaches it on its own, and a skip arriving once the flush has started
+    would skip the cleans after it. The method returns once the controller has the request; the
+    read returns when the instrument has finished.
 
     Raises:
       NotSetUpError: The driver is not set up.
@@ -730,11 +941,8 @@ class IQueDevice(Resource):
     if read is None:
       logger.info("no read runs; nothing to stop")
       return
-    if read.kind == "tube":
-      await driver.cancel_worklist()
-      return
     if await driver.call(driver.client.worklist_get_status) != "RunningWorklist":
-      logger.info("the plate read does not run on the instrument yet, or any more; nothing to stop")
+      logger.info("the read does not run on the instrument yet, or any more; nothing to stop")
       return
     current = await driver.call(driver.client.worklist_get_current)
     if current is None:
@@ -744,18 +952,18 @@ class IQueDevice(Resource):
       for command in current.commands or []
     )
     if not recording:
-      logger.info("the plate read has not started recording; cancelling it")
+      logger.info("the %s read has not started recording; cancelling it", read.kind)
       read.stop_requested = True
       await driver.cancel_worklist()
       return
     running = driver.status.current_command
     target = flush_target(current, running=None if running is None else running.id)
     if target is None:
-      logger.info("the plate read already flushes the line; nothing to skip")
+      logger.info("the %s read flushes the line already or next; nothing to skip", read.kind)
       return
     read.stop_requested = True
     if await driver.skip_worklist_to(target.id):
-      logger.info("stopping the plate read early: skipping to %r", target.description)
+      logger.info("stopping the %s read early: skipping to %r", read.kind, target.description)
 
   async def read_tube(
     self,
@@ -765,12 +973,14 @@ class IQueDevice(Resource):
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
     allow_warnings: bool = False,
+    finalize_previous: bool = False,
   ) -> TubeRead:
     """Read the 1.5 mL microcentrifuge tube in the tube holder.
 
     The instrument feels for the tube (within the tolerance the controller states), primes the
     line, draws from the tube for the sip time, flushes the line and, as `settings` say, cleans
-    the probe. Every event belongs to the tube.
+    the probe. Every event belongs to the tube. However the read ends, :attr:`flush_needed`
+    records whether it left sample in the line.
 
     Args:
       settings: How to read.
@@ -778,6 +988,7 @@ class IQueDevice(Resource):
       on_progress: Called for every command of the worklist that starts or ends.
       timeout: Seconds after which the read is cancelled; None waits as long as it takes.
       allow_warnings: Read although devices report warnings.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The read.
@@ -785,7 +996,7 @@ class IQueDevice(Resource):
     Raises:
       ValueError: A setting does not suit the instrument.
       CalibrationMissingError: The calibration lacks the tube holder, a station or a height.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceFaultedError: A device is faulted.
       DeviceNotReadyError: The detector or another device is not ready.
       UnsafeMotionError: The probe reports contact.
@@ -807,12 +1018,23 @@ class IQueDevice(Resource):
     await self._require_detector_ready(action)
     await self._require_no_contact(action)
     self._read = _ActiveRead("tube")
+    ended: Optional[Worklist] = None
     try:
-      run = await driver.run_worklist(
-        worklist, on_progress=on_progress, timeout=timeout, allow_warnings=allow_warnings
-      )
+      try:
+        run = await driver.run_worklist(
+          worklist,
+          on_progress=on_progress,
+          timeout=timeout,
+          allow_warnings=allow_warnings,
+          finalize_previous=finalize_previous,
+        )
+      except WorklistFailedError as error:
+        ended = error.run.worklist
+        raise
+      ended = run.worklist
     finally:
       self._read = None
+      await _finish(self._note_line_of(worklist, ended))
     result = tube_read_from_run(run, settings)
     logger.info("tube read: %d events", result.event_count)
     return result
@@ -828,6 +1050,7 @@ class IQueDevice(Resource):
     *,
     on_progress: Optional[Callable[[RunProgress], None]],
     timeout: Optional[float],
+    finalize_previous: bool,
     allow_warnings: bool = False,
     flushes_line: bool = False,
   ) -> CompletedRun:
@@ -838,6 +1061,7 @@ class IQueDevice(Resource):
       build: Builds the worklist.
       on_progress: Called for every command that starts or ends.
       timeout: Seconds after which the run is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
       allow_warnings: Run although devices report warnings.
       flushes_line: Whether the worklist clears sample a stopped read left in the line.
     """
@@ -847,7 +1071,11 @@ class IQueDevice(Resource):
     await self._require_no_contact(action)
     logger.info("%s: %s", action, worklist.name)
     run = await self.driver.run_worklist(
-      worklist, on_progress=on_progress, timeout=timeout, allow_warnings=allow_warnings
+      worklist,
+      on_progress=on_progress,
+      timeout=timeout,
+      allow_warnings=allow_warnings,
+      finalize_previous=finalize_previous,
     )
     if flushes_line:
       self._flush_needed = False
@@ -863,6 +1091,7 @@ class IQueDevice(Resource):
     up_time: float = 1.0,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Prime the line from Buffer, the probe dipping repeatedly, with the detector's fluidics
     on.
@@ -879,6 +1108,7 @@ class IQueDevice(Resource):
       up_time: Time up per dip, 0.5 to 59.9 s.
       on_progress: Called for every command that starts or ends.
       timeout: Seconds after which the prime is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
@@ -886,7 +1116,7 @@ class IQueDevice(Resource):
     Raises:
       ValueError: A value is out of range.
       CalibrationMissingError: Buffer, the deck height or the travel height is not calibrated.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceNotReadyError: The detector or another device is not ready.
       UnsafeMotionError: The probe reports contact.
       WorklistFailedError: The prime did not complete.
@@ -899,6 +1129,7 @@ class IQueDevice(Resource):
       ),
       on_progress=on_progress,
       timeout=timeout,
+      finalize_previous=finalize_previous,
       flushes_line=True,
     )
 
@@ -909,6 +1140,7 @@ class IQueDevice(Resource):
     pump_speed: Optional[float] = None,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Clean the probe and the sample tubing: dip in Decon for a quarter of the duration, in
     Clean for a quarter and in Water for half. The troughs must be filled.
@@ -918,6 +1150,7 @@ class IQueDevice(Resource):
       pump_speed: Pump speed in rpm, 10 to 53; None for the pump's default speed.
       on_progress: Called for every command that starts or ends.
       timeout: Seconds after which the clean is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
@@ -926,7 +1159,7 @@ class IQueDevice(Resource):
       ValueError: A value is out of range.
       CalibrationMissingError: A station, the deck height or the travel height is not
         calibrated.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceNotReadyError: The detector or another device is not ready.
       UnsafeMotionError: The probe reports contact.
       WorklistFailedError: The clean did not complete.
@@ -937,6 +1170,7 @@ class IQueDevice(Resource):
       lambda calibration: probe_and_tubing_clean_worklist(calibration, duration, pump_speed=speed),
       on_progress=on_progress,
       timeout=timeout,
+      finalize_previous=finalize_previous,
       flushes_line=True,
     )
 
@@ -948,6 +1182,7 @@ class IQueDevice(Resource):
     ready_timeout: Optional[float] = None,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Start the instrument up for the day: switch the detector on if it is off, wait until
     it can start maintenance, and run the start-up probe and tubing clean.
@@ -962,6 +1197,7 @@ class IQueDevice(Resource):
         plus a minute, or 25 minutes when it gives none.
       on_progress: Called for every command of the clean that starts or ends.
       timeout: Seconds after which the clean is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed clean.
@@ -972,7 +1208,7 @@ class IQueDevice(Resource):
       IQueTimeoutError: The detector did not come on, or was not ready, in time.
       DeviceFaultedError: The detector faulted while it was waited for.
       DeviceNotReadyError: The detector left the ready state while it was waited for.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       WorklistFailedError: The clean did not complete.
     """
     detector = self.detector
@@ -995,6 +1231,7 @@ class IQueDevice(Resource):
       ),
       on_progress=on_progress,
       timeout=timeout,
+      finalize_previous=finalize_previous,
       allow_warnings=True,
       flushes_line=True,
     )
@@ -1006,6 +1243,7 @@ class IQueDevice(Resource):
     pump_speed: Optional[float] = None,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> Optional[CompletedRun]:
     """Shut the instrument down for the day: the probe and tubing clean, then the detector's
     shutdown. Nothing is run when the detector is off already.
@@ -1019,12 +1257,13 @@ class IQueDevice(Resource):
       pump_speed: Pump speed in rpm, 10 to 53; None for the pump's default speed.
       on_progress: Called for every command that starts or ends.
       timeout: Seconds after which the run is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run, or None when the detector was off.
 
     Raises:
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceNotReadyError: The detector is not ready to run.
       WorklistFailedError: The clean or the shutdown did not complete.
     """
@@ -1039,6 +1278,7 @@ class IQueDevice(Resource):
       ),
       on_progress=on_progress,
       timeout=timeout,
+      finalize_previous=finalize_previous,
       allow_warnings=True,
     )
 
@@ -1048,6 +1288,7 @@ class IQueDevice(Resource):
     pump_speed: Optional[float] = None,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Run the one-minute fluidics (leak) check, after changing filters, the FluidLink or the
     probe: the probe stays in Water while the pump runs. Meanwhile look for leaks at the pump
@@ -1057,13 +1298,14 @@ class IQueDevice(Resource):
       pump_speed: Pump speed in rpm, 10 to 53; None for the pump's default speed.
       on_progress: Called for every command that starts or ends.
       timeout: Seconds after which the check is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
 
     Raises:
       CalibrationMissingError: Water, the deck height or the travel height is not calibrated.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceNotReadyError: The detector or another device is not ready.
       UnsafeMotionError: The probe reports contact.
       WorklistFailedError: The check did not complete.
@@ -1074,6 +1316,7 @@ class IQueDevice(Resource):
       lambda calibration: fluidics_check_worklist(calibration, pump_speed=speed),
       on_progress=on_progress,
       timeout=timeout,
+      finalize_previous=finalize_previous,
     )
 
   async def validate_deck_height(
@@ -1081,6 +1324,7 @@ class IQueDevice(Resource):
     *,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Check the deck height as every plate read does first: the instrument loads the plate
     rail and touches the test point, and the run fails unless the contact is within the
@@ -1089,6 +1333,7 @@ class IQueDevice(Resource):
     Args:
       on_progress: Called for the command when it starts and ends.
       timeout: Seconds after which the check is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run; the command's notes hold what the controller measured.
@@ -1096,7 +1341,7 @@ class IQueDevice(Resource):
     Raises:
       CalibrationMissingError: The deck height, its test point or the travel height is not
         calibrated.
-      WorklistActiveError: A worklist runs.
+      WorklistActiveError: A worklist runs, or a finished one waits to be finalised.
       DeviceNotReadyError: A device is not ready.
       UnsafeMotionError: The probe reports contact.
       WorklistFailedError: The deck is not at its calibrated height, or the check did not
@@ -1108,6 +1353,7 @@ class IQueDevice(Resource):
       lambda calibration: deck_height_validation_worklist(calibration, tolerance=tolerance),
       on_progress=on_progress,
       timeout=timeout,
+      finalize_previous=finalize_previous,
     )
 
   async def _raise_park_and_eject(self) -> None:
@@ -1117,15 +1363,7 @@ class IQueDevice(Resource):
     Raises:
       UnsafeMotionError: The contact sensor still reports contact with the probe raised.
     """
-    await self.sampler.move_z(self.driver.require_limits().z_range.max)
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + CONTACT_CLEAR_TIMEOUT
-    while await self.sampler.has_contact():
-      if loop.time() >= deadline:
-        raise UnsafeMotionError(
-          "the contact sensor reports contact with the probe raised; it appears to be stuck"
-        )
-      await asyncio.sleep(CONTACT_POLL_INTERVAL)
+    await self.sampler.raise_clear_of_contact("park the probe and eject the plate rail")
     await self.sampler.home()
     await self.plate_rail.eject()
 
@@ -1138,8 +1376,11 @@ class IQueDevice(Resource):
     tolerance the controller states for a new probe (4 mm), then returns up. A contact within
     that tolerance of the stored deck height becomes the new deck height, with today's date;
     the test point stays. The probe then parks and the rail ejects, also when the measurement
-    fails. The new calibration file is uploaded after the instrument's current file is backed
-    up to the driver's ``calibration_backup_dir``.
+    fails.
+
+    The instrument's calibration file is then downloaded again, and only its deck height and
+    that height's date are changed in it; every other byte stays as the instrument holds it. The
+    file is backed up to the driver's ``calibration_backup_dir`` and the new one uploaded.
 
     Every well, station and tube depth is stored relative to the deck height, so all of them
     follow the new value.
@@ -1153,7 +1394,8 @@ class IQueDevice(Resource):
     Raises:
       ValueError: `confirm` is not True.
       CalibrationRefusedError: The driver has no backup folder, the probe did not touch within
-        the tolerance, or the upload failed its checks.
+        the tolerance, the instrument's calibration changed meanwhile, or the new file failed
+        its checks.
       CalibrationMissingError: The deck height and its test point are not calibrated.
       WorklistActiveError: A worklist runs.
       UnsafeMotionError: The probe reports contact, or the plate rail cannot move.
@@ -1199,8 +1441,19 @@ class IQueDevice(Resource):
         f"{expected}"
       )
     measured_on = datetime.datetime.now().astimezone().replace(microsecond=0)
-    updated = with_deck_height(calibration, contact, measured_on)
-    backup = await driver.upload_calibration(write_calibration(updated))
+    current = await driver.download_calibration()
+    if driver.calibration is None or driver.calibration.instrument != calibration.instrument:
+      raise CalibrationRefusedError(
+        "the instrument's calibration changed while the deck height was measured; nothing was "
+        "stored"
+      )
+    try:
+      updated = patch_deck_height(current, contact, measured_on)
+    except CalibrationError as error:
+      raise CalibrationRefusedError(
+        f"the new deck height cannot be written into the instrument's file: {error}"
+      ) from error
+    backup = await driver.upload_calibration(updated)
     logger.warning(
       "stored a new deck height of %s mm (was %s mm); the previous calibration file is at %s",
       contact,

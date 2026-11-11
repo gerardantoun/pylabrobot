@@ -2,6 +2,7 @@
 
 import dataclasses
 import pathlib
+import statistics
 import tempfile
 import unittest
 
@@ -22,6 +23,7 @@ from pylabrobot.sartorius.ique.driver.worklist import (
   PlateReadSettings,
   TubeReadSettings,
   plate_read_worklist,
+  sampled_wells,
   tube_read_worklist,
 )
 
@@ -116,6 +118,33 @@ class ResultTests(unittest.IsolatedAsyncioTestCase):
     with self.assertRaises(WellIdentificationFailedError) as caught:
       self.from_run(empty)
     self.assertIs(caught.exception.run, empty)
+
+  async def test_measured_transit_delay(self) -> None:
+    """A clean read gives its transit delay; with it, a read whose first well is blank and
+    whose line held sample keeps every other well in place and names nothing else."""
+    read = await self.plate_read()
+    start = read.acquisition_start
+    assert start is not None
+    self.assertGreater(start, 0.0)
+    self.assertLessEqual(start, sampled_wells(read.worklist)[0].start)
+    delays = read.transit_delays()
+    self.assertEqual(list(delays), WELLS)
+    transit = round(statistics.median(delays.values()), 1)
+    self.assertLess(max(delays.values()) - min(delays.values()), 0.25)
+    await self.controller.shutdown()
+    self.driver, self.controller = await simulated_driver(
+      seed=4, blank_wells=["A01"], carry_over=[24.0, 26.5]
+    )
+    run = await self.plate_run()
+    without = self.from_run(run)
+    self.assertEqual(without.verdict, "needs_review")
+    self.assertNotEqual(without.identification.wells[1].event_range, None)
+    self.settings = PlateReadSettings(transit_delay=transit)
+    placed = self.from_run(run)
+    self.assertEqual(placed.identification.flagged_wells, ("A01",))
+    self.assertEqual(placed.identification.inconsistent_wells, ())
+    self.assertEqual(placed.event_counts()["A01"], 0)
+    self.assertTrue(all(placed.event_counts()[well] > 50 for well in WELLS[1:]))
 
   async def test_tube_read(self) -> None:
     """Every event of a tube read belongs to the tube, and its file is the controller's."""

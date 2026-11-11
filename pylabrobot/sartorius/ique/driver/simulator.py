@@ -19,10 +19,23 @@ the probe's time in air leaves. Events stream as float chunks of the instrument'
 controller's running value count, and the controller's FCS file is written when the fluidics
 stop. Everything random comes from one generator seeded with `seed`, so a run is repeatable.
 
-What it does not model: collisions (nothing the controller would not check is checked here
-either), liquid in stations and wells, the Gilson's real motion profile, the instrument's
-fluid and laser status texts, firmware, demo files, and the controller's archive of finalised
-worklists.
+Motion takes time, as on the instrument: a Z move returns before the probe arrives (the probe
+travels at :data:`Z_SPEED`), an XY move and parking return once the probe is there, a rail move
+takes :data:`RAIL_MOVE_TIME`, and the flush of a plate read ejects the rail while the probe
+moves on. Outside a worklist the clock runs `speed` times faster than real time too. Initialising
+several devices in one call runs them at the same time, as the controller does. Nothing stops a
+collision, as nothing does on the instrument, but the simulator records every time the plate
+rail moves while the probe is low over it in :attr:`SimulatedController.collisions`.
+
+For well identification it can leave wells without events (`blank_wells`), send bursts of
+events that arrive after recording starts as sample left in the line would (`carry_over`), and
+turn the probe's dips in stations into events (`station_events_per_second`); what the probe draws
+before recording starts reaches the detector after the transit delay all the same. A status that
+blocks measurements but not maintenance can be raised (:meth:`SimulatedController.block_runs`).
+
+What it does not model: liquid in stations and wells, the Gilson's real motion profile, the
+instrument's fluid and laser status texts, firmware, demo files, and the controller's archive of
+finalised worklists.
 """
 
 from __future__ import annotations
@@ -128,6 +141,19 @@ _X_RANGE = (0.0, 131.0)
 _Y_RANGE = (0.0, 195.0)
 _Z_RANGE = (190.0, 250.0)
 _CONTACT_DEPTH = 3.0  # how far below z_low a contact search goes
+_CONTACT_DWELL = 1.0  # seconds a contact search waits at the bottom
+_MOTION_STEP = 0.1  # simulated seconds between checks while a direct operation waits
+# The rectangle over the plate holder, in mm: the probe is over the plate rail there.
+_RAIL_AREA = (0.0, 131.0, 28.0, 128.0)
+
+Z_SPEED = 125.0
+"""How fast the simulated probe travels in Z, in mm per second."""
+RAIL_MOVE_TIME = 3.0
+"""Seconds the simulated plate rail takes to move in or out."""
+RAIL_HOME_TIME = 4.0
+"""Seconds the simulated plate rail takes to home, before it moves out."""
+CLEARANCE_HEIGHT = 20.0
+"""How far above the deck the probe must be, in mm, for the plate rail to move under it."""
 # A tube in the tube holder is touched this far above the empty holder's bottom; a tube check
 # passes from this far above it.
 _TUBE_CONTACT_HEIGHT = 1.0
@@ -310,6 +336,12 @@ class SimulatedController:
     calibration_file: The stored calibration file, or None.
     deck_height: The height at which the probe touches the plate holder while the rail is in.
     tube_in_holder: Whether a tube sits in the tube holder.
+    collisions: A description of every time the plate rail moved while the probe was over it
+      and lower than :data:`CLEARANCE_HEIGHT` above the deck.
+    blank_wells: Wells, such as ``A01``, whose dips give no events.
+    carry_over: Seconds after recording starts at which a burst of events arrives, one sip long
+      and as strong as a well's, as sample left in the line by an earlier read would.
+    station_events_per_second: Event rate while the probe dips in a station.
   """
 
   def __init__(
@@ -330,13 +362,16 @@ class SimulatedController:
     deck_height: float = SIMULATED_DECK_HEIGHT,
     drop_data_chunks: Sequence[int] = (),
     drop_worklist_completed: bool = False,
+    blank_wells: Sequence[str] = (),
+    carry_over: Sequence[float] = (),
+    station_events_per_second: float = 0.0,
   ) -> None:
     """Create the simulator.
 
     Args:
       system_type: The system type it reports.
       seed: Seed of every random choice.
-      speed: How many simulated seconds pass per real second during a worklist.
+      speed: How many simulated seconds pass per real second.
       version: The controller version it reports.
       system_id: The system ID it reports.
       calibration: The stored calibration file: ``"simulated"`` for
@@ -353,6 +388,10 @@ class SimulatedController:
       drop_data_chunks: Indices of event chunks whose callback is lost, as when the client is
         too slow; the running value count still advances.
       drop_worklist_completed: Lose the worklist-completed callback.
+      blank_wells: Wells, such as ``A01``, whose dips give no events.
+      carry_over: Seconds after recording starts at which bursts of sample left in the line
+        arrive.
+      station_events_per_second: Event rate while the probe dips in a station.
     """
     self.calls: List[Tuple[str, Tuple[Any, ...]]] = []
     self._system_type = system_type
@@ -371,6 +410,10 @@ class SimulatedController:
     self.noise_per_second = noise_per_second
     self.deck_height = deck_height
     self.tube_in_holder = True
+    self.collisions: List[str] = []
+    self.blank_wells: Set[str] = set(blank_wells)
+    self.carry_over: Tuple[float, ...] = tuple(carry_over)
+    self.station_events_per_second = station_events_per_second
     self._drop_chunks: Set[int] = set(drop_data_chunks)
     self._drop_worklist_completed = drop_worklist_completed
     self._table = parameter_table_for_system_kind(system_type)
@@ -381,6 +424,8 @@ class SimulatedController:
     self._handlers: Dict[str, Callable[..., None]] = {}
     self._virtual = 0.0
     self._pace_origin: Optional[float] = None
+    self._running = False
+    self._idle_origin: Optional[Tuple[float, float]] = None
     self._demo = False
     self.verbose_logging = True
 
@@ -389,9 +434,15 @@ class SimulatedController:
     self._messages: Dict[DeviceKind, List[DeviceMessage]] = {kind: [] for kind in _DEVICE_ORDER}
     self._system_state: SystemState = "Red"
     self._resetting = False
+    self._run_blocked: Optional[str] = None
 
-    self._x, self._y, self._z = _X_RANGE[1], _Y_RANGE[1], _Z_RANGE[1]
+    self._x, self._y = _X_RANGE[1], _Y_RANGE[1]
+    # A Z move: from, to, when it started and when it arrives, on the simulated clock.
+    self._z_motion: Tuple[float, float, float, float] = (_Z_RANGE[1], _Z_RANGE[1], 0.0, 0.0)
+    # A rail move: where to and when it arrives; None while the rail stands.
+    self._rail_motion: Optional[Tuple[Literal["loaded", "ejected"], float]] = None
     self._contact = False
+    self._contact_override: Optional[bool] = None
     self._contact_changes = 0
     self._pump_speed = 0
     self._pump_direction: PumpDirection = "CW"
@@ -491,9 +542,20 @@ class SimulatedController:
       except asyncio.CancelledError:
         pass  # the task was cancelled just above
 
+  def _clock(self) -> float:
+    """Return the simulated clock in seconds: the runner's while a worklist runs, and outside
+    one real time `speed` times faster, carrying on from where the last run left it."""
+    if self._running:
+      return self._virtual
+    now = asyncio.get_running_loop().time()
+    if self._idle_origin is None:
+      self._idle_origin = (now, self._virtual)
+    real, simulated = self._idle_origin
+    return simulated + (now - real) * self.speed
+
   def _now(self) -> datetime.datetime:
     """Return the controller's clock."""
-    return CLOCK_START + datetime.timedelta(seconds=self._virtual)
+    return CLOCK_START + datetime.timedelta(seconds=self._clock())
 
   def _emit(self, callback: str, *arguments: Any) -> None:
     """Send a callback to the registered session, as the controller does, if there is one.
@@ -586,6 +648,7 @@ class SimulatedController:
       raise ConnectionError(f"{operation}: the session is not open")
     if not self._registered:
       raise controller_fault(operation, "Client must call connect before using other API methods.")
+    self._settle()
 
   def _spawn(self, work: Awaitable[None]) -> None:
     """Run a piece of the controller's background work."""
@@ -669,12 +732,31 @@ class SimulatedController:
       kind, "Faulted", [DeviceMessage(detail="", message=message, message_level="Error")]
     )
 
-  def set_contact(self, has_contact: bool) -> None:
-    """Set the probe's contact sensor and report the change; for tests."""
-    if has_contact != self._contact:
-      self._contact = has_contact
-      self._contact_changes += 1
-      self._emit("OnContactSensorStateChanged", has_contact)
+  def set_contact(self, has_contact: Optional[bool]) -> None:
+    """Make the probe's contact sensor report contact, or none, whatever the probe touches;
+    None lets it follow the probe again. For tests."""
+    self._contact_override = has_contact
+    self._report_contact(None)
+
+  def block_runs(self, message: Optional[str]) -> None:
+    """Make the detector report a status that blocks measurements but not its maintenance
+    routines, or clear it with None; for tests."""
+    self._run_blocked = message
+    messages = (
+      [] if message is None else [DeviceMessage(detail="", message=message, message_level="Error")]
+    )
+    if self._state("Cytometer") not in (None, "Disconnected"):
+      self._set_state("Cytometer", self._states["Cytometer"], messages)
+
+  def _report_contact(self, touching: Optional[bool]) -> None:
+    """Set the contact sensor to what the probe touches (None: unchanged), unless a test
+    overrides it, and report a change."""
+    value = touching if self._contact_override is None else self._contact_override
+    if value is None or value == self._contact:
+      return
+    self._contact = value
+    self._contact_changes += 1
+    self._emit("OnContactSensorStateChanged", value)
 
   def raise_alert(self, kind: DeviceKind, alert: wire.DeviceAlert) -> None:
     """Report a device alert; for tests."""
@@ -711,28 +793,107 @@ class SimulatedController:
   # Motion and devices, as the device layer does them
   # -------------------------------------------------------------------------------------------
 
+  @property
+  def _z(self) -> float:
+    """The probe's Z now, along its Z move."""
+    start, target, began, arrives = self._z_motion
+    now = self._clock()
+    if now >= arrives or arrives <= began:
+      return target
+    return start + (target - start) * (now - began) / (arrives - began)
+
+  @_z.setter
+  def _z(self, z: float) -> None:
+    """Put the probe at a Z at once."""
+    now = self._clock()
+    self._z_motion = (z, z, now, now)
+
+  def _z_time(self, target: float) -> float:
+    """Seconds the probe takes from where it is to a Z."""
+    return abs(target - self._z) / Z_SPEED
+
   def _surface(self) -> Optional[float]:
     """The height of what the probe would touch at its XY: the deck while the rail is in."""
-    return self.deck_height if self._rail == "loaded" else None
+    return self.deck_height if self._rail == "loaded" and self._rail_motion is None else None
 
   def _move_z(self, z: float) -> None:
-    """Move the probe in Z; it stops on a surface and the contact sensor reports it."""
+    """Start a Z move, as the controller's Z move does, and return before the probe arrives;
+    it stops on a surface, which the contact sensor then reports."""
     surface = self._surface()
-    if surface is not None and z < surface:
-      self._z = surface
-      self.set_contact(True)
-    else:
-      self._z = z
-      if surface is None or z > surface + 0.5:
-        self.set_contact(False)
+    target = surface if surface is not None and z < surface else z
+    start = self._z
+    now = self._clock()
+    self._z_motion = (start, target, now, now + abs(target - start) / Z_SPEED)
 
-  def _park(self) -> None:
-    """Park the probe: Z to the top, then XY to the largest X and Y; refused on contact."""
+  def _over_rail(self) -> bool:
+    """Whether the probe is over the plate rail and too low for it to move under the probe."""
+    x_min, x_max, y_min, y_max = _RAIL_AREA
+    over = x_min <= self._x <= x_max and y_min <= self._y <= y_max
+    return over and self._z < self.deck_height + CLEARANCE_HEIGHT
+
+  def _check_clearance(self, what: str) -> None:
+    """Record a collision when the probe is low over the rail while it moves."""
+    if self._over_rail():
+      self.collisions.append(
+        f"{what} with the probe at X {self._x:.2f}, Y {self._y:.2f}, Z {self._z:.2f}"
+      )
+
+  def _settle(self) -> None:
+    """Bring the devices up to the clock: finish a rail move that has arrived (and check one
+    that moves for a collision), and let the contact sensor follow the probe."""
+    if self._rail_motion is not None:
+      target, arrives = self._rail_motion
+      if self._clock() >= arrives:
+        self._rail_motion = None
+        self._rail = target
+        if self._states["PlateRail"] == "Running":
+          self._set_state("PlateRail", "Ready")
+      else:
+        self._check_clearance("the plate rail moved")
+    surface = self._surface()
+    z = self._z
+    if surface is not None and z <= surface + 1e-6:
+      self._report_contact(True)
+    elif surface is None or z > surface + 0.5:
+      self._report_contact(False)
+
+  def _park(self) -> bool:
+    """Start parking the probe: Z to the top, then XY to the largest X and Y; refused, with a
+    fault of the sampler, on contact.
+
+    Returns:
+      Whether it parks.
+    """
     if self._contact:
       self.fault_device("Sampler", "Park Faulted")
+      return False
+    return True
+
+  def _park_times(self) -> Tuple[float, float]:
+    """Seconds parking takes in Z and then in XY, from where the probe is."""
+    return self._z_time(_Z_RANGE[1]), self._xy_time(_X_RANGE[1], _Y_RANGE[1], True)
+
+  async def _wait(self, seconds: float, *, runner: bool) -> None:
+    """Let simulated time pass, in the runner's steps or, outside it, in short real sleeps,
+    keeping the devices up to the clock."""
+    if runner:
+      await self._elapse(seconds, cancellable=False)
       return
+    end = self._clock() + seconds
+    while self._clock() < end - _TIME_TOLERANCE:
+      await self._sleep(min(_MOTION_STEP, end - self._clock()))
+      self._settle()
+
+  async def _park_and_wait(self, *, runner: bool) -> None:
+    """Park the probe and wait until it is parked: Z first, then XY."""
+    if not self._park():
+      return
+    z_time, xy_time = self._park_times()
     self._move_z(_Z_RANGE[1])
+    await self._wait(z_time, runner=runner)
+    await self._wait(xy_time, runner=runner)
     self._x, self._y = _X_RANGE[1], _Y_RANGE[1]
+    self._settle()
 
   def _xy_time(self, x: float, y: float, fast: bool) -> float:
     """Simulated seconds an XY move takes."""
@@ -782,20 +943,36 @@ class SimulatedController:
     self._shaker_rpm = 0
     self._set_state("Shaker", "Ready")
 
-  def _rail_move(self, position: Literal["loaded", "ejected"]) -> None:
-    """Move the plate rail when it is ready."""
-    if self._state("PlateRail") != "Ready":
+  def _start_rail(
+    self, position: Literal["loaded", "ejected"], seconds: float = RAIL_MOVE_TIME
+  ) -> None:
+    """Start moving the plate rail when it is ready; nothing moves when it is there already."""
+    if self._state("PlateRail") != "Ready" or self._rail_motion is not None:
       return
-    self._rail = position
-    surface = self._surface()
-    if surface is None or self._z > surface + 0.5:
-      self.set_contact(False)
+    if self._rail == position:
+      return
+    self._set_state("PlateRail", "Running")
+    self._rail_motion = (position, self._clock() + seconds)
+    self._check_clearance("the plate rail started moving")
 
-  def _close_lock_and_load(self) -> None:
+  async def _rail_move(
+    self, position: Literal["loaded", "ejected"], *, runner: bool, seconds: float = RAIL_MOVE_TIME
+  ) -> None:
+    """Move the plate rail when it is ready, and wait until it is there."""
+    self._start_rail(position, seconds)
+    await self._wait_for_rail(runner=runner)
+
+  async def _wait_for_rail(self, *, runner: bool) -> None:
+    """Wait until a rail move has arrived."""
+    while self._rail_motion is not None:
+      await self._wait(max(self._rail_motion[1] - self._clock(), _TIME_TOLERANCE), runner=runner)
+      self._settle()
+
+  async def _close_lock_and_load(self) -> None:
     """Close the plate lock, then load the rail, as the controller does before a plate."""
     if self._state("Shaker") == "Ready":
       self._lock_closed = True
-    self._rail_move("loaded")
+    await self._rail_move("loaded", runner=True)
 
   # -------------------------------------------------------------------------------------------
   # Connection, identity, device management
@@ -917,24 +1094,46 @@ class SimulatedController:
   async def controller_initialize_devices(
     self, device_initialization_list: Optional[List[DeviceKind]], *, timeout: Optional[float] = None
   ) -> None:
-    """Initialise devices: park the probe, stop the pump, home the shaker, home and eject the
-    rail."""
+    """Initialise devices, all of the call at the same time, as the controller does: park the
+    probe (Z first, with no check of the contact sensor), stop the pump, home the shaker, home
+    the rail and move it out, and start the contact sensor, which faults when it reports
+    contact."""
     self._record("controller_initialize_devices", device_initialization_list)
     kinds = list(device_initialization_list or []) or [
       kind for kind in self._configured if self._states[kind] != "Disconnected"
     ]
+    work: List[Awaitable[None]] = []
     for kind in kinds:
       if self._states[kind] == "Disconnected":
         continue
       if kind == "Sampler":
-        self._park()
+        work.append(self._initialize_sampler())
       elif kind == "Pump":
         self._pump_stop()
       elif kind == "Shaker":
         self._shaker_stop()
         self._lock_closed = True
       elif kind == "PlateRail":
-        self._rail = "ejected"
+        work.append(self._initialize_rail())
+      elif kind == "ContactSensor" and self._contact:
+        self.fault_device("ContactSensor", "Probe in contact at initialisation")
+    await asyncio.gather(*work)
+
+  async def _initialize_sampler(self) -> None:
+    """Park the probe as the sampler's start-up does: Z to the top, then XY, without the
+    contact check of an ordinary park."""
+    z_time, xy_time = self._park_times()
+    self._move_z(_Z_RANGE[1])
+    await self._wait(z_time, runner=False)
+    await self._wait(xy_time, runner=False)
+    self._x, self._y = _X_RANGE[1], _Y_RANGE[1]
+
+  async def _initialize_rail(self) -> None:
+    """Home the rail and move it out."""
+    if self._state("PlateRail") != "Ready":
+      return
+    self._rail = None
+    await self._rail_move("ejected", runner=False, seconds=RAIL_HOME_TIME + RAIL_MOVE_TIME)
 
   async def controller_get_device_statuses(
     self, *, timeout: Optional[float] = None
@@ -985,6 +1184,8 @@ class SimulatedController:
   async def cytometer_is_ready_to_run(self, *, timeout: Optional[float] = None) -> bool:
     """Whether a measurement can start."""
     self._record("cytometer_is_ready_to_run")
+    if self._run_blocked is not None:
+      return False
     return self._ready("Cytometer") and self._purge[0] == "None" and self._priming[0] == "None"
 
   async def cytometer_is_ready_to_clean(self, *, timeout: Optional[float] = None) -> bool:
@@ -997,7 +1198,7 @@ class SimulatedController:
   ) -> datetime.timedelta:
     """Remaining time of the detector's operation."""
     self._record("cytometer_get_operation_duration")
-    return datetime.timedelta(seconds=max(0.0, self._operation_end - self._virtual))
+    return datetime.timedelta(seconds=max(0.0, self._operation_end - self._clock()))
 
   def _power_off(self) -> None:
     """Switch the detector off."""
@@ -1055,7 +1256,7 @@ class SimulatedController:
       raise controller_fault("IQue3_RunNextPurgeStep", "The purge is complete")
     index = 0 if step == "None" else _PURGE_STEPS.index(step) + 1
     self._purge = (_PURGE_STEPS[index], False)
-    self._operation_end = self._virtual + _STEP_DURATION
+    self._operation_end = self._clock() + _STEP_DURATION
     self.raise_alert("Cytometer", "CYT_PurgingFluidics")
     self._spawn(self._complete_step("purge"))
 
@@ -1078,7 +1279,7 @@ class SimulatedController:
       )
     index = 0 if step == "None" else _PRIMING_STEPS.index(step) + 1
     self._priming = (_PRIMING_STEPS[index], False)
-    self._operation_end = self._virtual + _STEP_DURATION
+    self._operation_end = self._clock() + _STEP_DURATION
     self.raise_alert("Cytometer", "CYT_InstallationPriming")
     self._spawn(self._complete_step("priming"))
 
@@ -1101,12 +1302,12 @@ class SimulatedController:
   async def plate_rail_load(self, *, timeout: Optional[float] = None) -> None:
     """Move the rail in; the controller checks neither the probe nor a plate."""
     self._record("plate_rail_load")
-    self._rail_move("loaded")
+    await self._rail_move("loaded", runner=False)
 
   async def plate_rail_eject(self, *, timeout: Optional[float] = None) -> None:
     """Move the rail out; the controller does not check the probe."""
     self._record("plate_rail_eject")
-    self._rail_move("ejected")
+    await self._rail_move("ejected", runner=False)
 
   async def pump_get_min_speed(self, *, timeout: Optional[float] = None) -> int:
     """The pump's lowest speed, in hundredths of rpm."""
@@ -1143,10 +1344,11 @@ class SimulatedController:
     self._pump_stop()
 
   async def sampler_home(self, *, timeout: Optional[float] = None) -> None:
-    """Park the probe; refused, faulting the sampler, while the probe reports contact."""
+    """Park the probe slowly and return once it is parked; refused, faulting the sampler,
+    while the probe reports contact."""
     self._record("sampler_home")
     if self._state("Sampler") == "Ready":
-      self._park()
+      await self._park_and_wait(runner=False)
 
   def _position(self, value: float) -> decimal.Decimal:
     """Return a position as the controller reports it."""
@@ -1214,14 +1416,18 @@ class SimulatedController:
     *,
     timeout: Optional[float] = None,
   ) -> None:
-    """Move XY wherever told; the controller checks nothing."""
+    """Move XY wherever told, once a Z move has arrived, and return when XY has stopped; the
+    controller checks nothing."""
     self._record("sampler_move_xy", x, y, fast)
     if self._state("Sampler") != "Ready":
       return
+    await self._wait(max(self._z_motion[3] - self._clock(), 0.0), runner=False)
+    await self._wait(self._xy_time(float(x), float(y), fast), runner=False)
     self._x, self._y = float(x), float(y)
+    self._settle()
 
   async def sampler_move_z(self, z: decimal.Decimal, *, timeout: Optional[float] = None) -> None:
-    """Move Z wherever told."""
+    """Start a Z move wherever told and return before the probe arrives."""
     self._record("sampler_move_z", z)
     if self._state("Sampler") != "Ready":
       return
@@ -1267,7 +1473,12 @@ class SimulatedController:
         is_simulated=False,
         z_low=z_low,
       )
-    return self._find_contact(float(z_high), float(z_low), retract_after_find)
+    bottom = max(float(z_low) - _CONTACT_DEPTH, _Z_RANGE[0])
+    descent = self._z_time(bottom)
+    await self._wait(descent + _CONTACT_DWELL + abs(float(z_high) - bottom) / Z_SPEED, runner=False)
+    result = self._find_contact(float(z_high), float(z_low), retract_after_find)
+    self._settle()
+    return result
 
   async def shaker_min_rpm(self, *, timeout: Optional[float] = None) -> int:
     """The shaker's lowest speed."""
@@ -1315,11 +1526,13 @@ class SimulatedController:
   @property
   def rail_position(self) -> Optional[Literal["loaded", "ejected"]]:
     """Where the plate rail is, or None before it was initialised."""
+    self._settle()
     return self._rail
 
   @property
   def probe_position(self) -> Tuple[float, float, float]:
-    """The probe's X, Y and Z."""
+    """The probe's X, Y and Z now."""
+    self._settle()
     return self._x, self._y, self._z
 
   # -------------------------------------------------------------------------------------------
@@ -1356,7 +1569,7 @@ class SimulatedController:
     if worklist is None or not worklist.commands:
       raise controller_fault("Worklist_Run", "The worklist has no commands")
     if self._state("Sampler") == "Ready":
-      self._park()
+      await self._park_and_wait(runner=False)
     name = worklist.name or ""
     plate = worklist.plate_id is not None and worklist.plate_id.int != 0
     if plate and "Test Tube" not in name and "Vial" not in name:
@@ -1440,6 +1653,7 @@ class SimulatedController:
       self._noise(step)
       self._virtual += step
       remaining -= step
+      self._settle()
       self._deliver_events()
       await self._pace()
     if cancellable and self._should_stop():
@@ -1477,12 +1691,20 @@ class SimulatedController:
     width = max(0.0, self._rng.gauss(50.0, 8.0))
     return heights + areas + [width, 0.0]
 
-  def _draw(self, start: float, end: float) -> None:
-    """Turn the probe drawing from a well between two simulated times into events that reach
-    the detector after the transit delay."""
-    if self._acquisition is None or self._state("Pump") != "Running":
+  def _draw(self, start: float, end: float, per_second: Optional[float] = None) -> None:
+    """Turn the probe drawing between two simulated times into events that reach the detector
+    after the transit delay, whether or not recording has started by then.
+
+    Args:
+      start: When the draw started.
+      end: When it ended.
+      per_second: The event rate; None for a well's, with its own random factor.
+    """
+    if self._state("Pump") != "Running":
       return
-    rate = self._rng.uniform(0.6, 1.4) * self.events_per_second * TIME_STEP
+    if per_second is None:
+      per_second = self._rng.uniform(0.6, 1.4) * self.events_per_second
+    rate = per_second * TIME_STEP
     brightness = self._rng.uniform(0.5, 3.0)
     transit = self.transit_delay
     if transit is None:
@@ -1506,7 +1728,7 @@ class SimulatedController:
     """Record the events that have reached the detector and stream them."""
     acquisition = self._acquisition
     if acquisition is None:
-      self._pending.clear()
+      self._pending = [pending for pending in self._pending if pending[0] > self._virtual]
       return
     due = 0
     while due < len(self._pending) and self._pending[due][0] <= self._virtual:
@@ -1580,7 +1802,17 @@ class SimulatedController:
       self._set_state("Cytometer", "Ready")
 
   async def _run(self, worklist: Worklist) -> None:
-    """Run a worklist as the controller's worklist thread does."""
+    """Run a worklist as the controller's worklist thread does, on the runner's clock."""
+    self._virtual = self._clock()
+    self._running = True
+    try:
+      await self._run_on_clock(worklist)
+    finally:
+      self._running = False
+      self._idle_origin = None
+
+  async def _run_on_clock(self, worklist: Worklist) -> None:
+    """Run a worklist; the runner's clock runs."""
     commands: List[WorklistCommand] = [c for c in worklist.commands or [] if c is not None]
     estimate = sum(command.estimated_duration.total_seconds() for command in commands)
     notes = f"Estimate={estimate:g}|" + "|".join(
@@ -1672,14 +1904,15 @@ class SimulatedController:
     if self._state("Shaker") != "Faulted":
       self._shaker_stop()
     if self._state("Sampler") not in (None, "Faulted", "Disconnected"):
-      self._park()
+      await self._park_and_wait(runner=True)
     if not leave_fluidics_running and self._state("Cytometer") is not None:
       await self._elapse(2.0, cancellable=False)
       self._stop_fluidics()
     elif self._acquisition is not None:
       self._close_fcs_file()
     if self._state("PlateRail") is not None:
-      self._rail_move("ejected")
+      await self._wait_for_rail(runner=True)
+      await self._rail_move("ejected", runner=True)
 
   @staticmethod
   def _notes(**steps: float) -> str:
@@ -1691,9 +1924,17 @@ class SimulatedController:
     return self._contact_changes // 2
 
   async def _dip(
-    self, x: float, y: float, fast: bool, z_down: float, z_up: float, sip_ms: int, up_ms: int
+    self,
+    x: float,
+    y: float,
+    fast: bool,
+    z_down: float,
+    z_up: float,
+    sip_ms: int,
+    up_ms: int,
+    draw: bool = True,
   ) -> Tuple[bool, str]:
-    """One dip: XY, down, draw, up, wait in air."""
+    """One dip: XY, down, draw (unless `draw` is False), up, wait in air."""
     move = self._xy_time(x, y, fast)
     await self._elapse(move, cancellable=False)
     self._x, self._y = x, y
@@ -1701,7 +1942,8 @@ class SimulatedController:
     self._move_z(z_down)
     start = self._virtual
     drew = await self._elapse(sip_ms / 1000, cancellable=True)
-    self._draw(start, self._virtual)
+    if draw:
+      self._draw(start, self._virtual)
     await self._elapse(0.1, cancellable=False)
     self._move_z(z_up)
     waited = drew and await self._elapse(up_ms / 1000, cancellable=True)
@@ -1718,7 +1960,10 @@ class SimulatedController:
     return drew and waited, f"{notes} ContactCount={self._contact_count()}"
 
   async def _sample_well(self, command: wire.SampleCommand) -> Tuple[bool, str]:
-    """SampleWellCommand and BeadSipCommand: one dip."""
+    """SampleWellCommand and BeadSipCommand: one dip; a blank well gives no events."""
+    well = None
+    if isinstance(command, wire.SampleWellCommand):
+      well = f"{command.row}{command.column:02d}"
     return await self._dip(
       float(command.x),
       float(command.y),
@@ -1727,6 +1972,7 @@ class SimulatedController:
       float(command.z_up),
       command.sip_time,
       command.up_time,
+      draw=well not in self.blank_wells,
     )
 
   async def _sample_vial(self, command: wire.SampleVialCommand) -> Tuple[bool, str]:
@@ -1765,7 +2011,10 @@ class SimulatedController:
     self._pump_start(command.pump_speed, command.pump_direction)
     start = self._virtual
     drew = await self._elapse(command.sip_time / 1000, cancellable=True)
-    self._draw(start, self._virtual)
+    if self._acquisition is not None:
+      self._draw(start, self._virtual)
+    elif self.station_events_per_second:
+      self._draw(start, self._virtual, self.station_events_per_second)
     self._pump_stop()
     self._move_z(float(command.z_high))
     return drew, f"MoveXY={move:.3f} WaitForSip={self._virtual - start:.3f}"
@@ -1791,9 +2040,12 @@ class SimulatedController:
     while duration - (self._virtual - start) > _TIME_TOLERANCE:
       self._move_z(z_down)
       left = duration - (self._virtual - start)
+      dip = self._virtual
       if not await self._elapse(min(sip_ms / 1000, left), cancellable=True):
         self._move_z(z_up)
         return False
+      if self.station_events_per_second:
+        self._draw(dip, self._virtual, self.station_events_per_second)
       self._move_z(z_up)
       left = duration - (self._virtual - start)
       if left > _TIME_TOLERANCE and not await self._elapse(
@@ -1846,9 +2098,12 @@ class SimulatedController:
     return completed, f"RinseDuration={command.rinse_duration * 1000}"
 
   async def _flush_and_eject(self, command: wire.FlushMatryoshkaCommand) -> Tuple[bool, str]:
-    """FlushMatryoshkaCommand: eject the rail while flushing."""
-    self._rail_move("ejected")
-    return await self._timed_cycling_rinse(command)
+    """FlushMatryoshkaCommand: eject the rail while flushing, from the moment the command
+    starts, then wait for the rail."""
+    self._start_rail("ejected")
+    result = await self._timed_cycling_rinse(command)
+    await self._wait_for_rail(runner=True)
+    return result
 
   async def _timed_continuous_rinse(
     self, command: wire.TimedContinuousRinseCommand
@@ -1938,7 +2193,7 @@ class SimulatedController:
       if contact > low + tolerance:
         raise _WorklistError("Obstruction")
       return True, notes
-    self._close_lock_and_load()
+    await self._close_lock_and_load()
     result = self._find_contact(float(command.z_high), low, True)
     contact = float(result.contact_z_location)
     if not result.found_contact:
@@ -1952,7 +2207,7 @@ class SimulatedController:
     command: Union[wire.StartFlowCytometerFluidicsCommand, wire.StartMatryoshkaFluidicsCommand],
   ) -> None:
     """Configure the detector and start its fluidics, or fault it when it cannot."""
-    if not self._ready("Cytometer"):
+    if not self._ready("Cytometer") or self._run_blocked is not None:
       if self._state("Cytometer") not in (None, "Disconnected"):
         self.fault_device("Cytometer", "Start Fluidics Faulted")
       return
@@ -1980,7 +2235,7 @@ class SimulatedController:
     self, command: wire.StartMatryoshkaFluidicsCommand
   ) -> Tuple[bool, str]:
     """StartMatryoshkaFluidicsCommand: load the plate and start the fluidics for acquisition."""
-    self._close_lock_and_load()
+    await self._close_lock_and_load()
     self._start_detector_fluidics(command)
     return await self._elapse(5.0, cancellable=True), ""
 
@@ -2018,7 +2273,18 @@ class SimulatedController:
     )
     acquisition.threshold = command.event_threshold
     self._acquisition = acquisition
+    for arrival in self.carry_over:
+      self._burst(self._virtual + arrival)
     return True, ""
+
+  def _burst(self, at: float) -> None:
+    """Add a burst of events that arrives at a simulated time: one second, as a well's."""
+    rate = self.events_per_second * TIME_STEP
+    brightness = self._rng.uniform(0.5, 3.0)
+    for tick in range(round(1.0 / TIME_STEP)):
+      for _ in range(self._poisson(rate)):
+        self._pending.append((at + tick * TIME_STEP, self._event_values(brightness)))
+    self._pending.sort(key=lambda pending: pending[0])
 
   async def _stop_acquire(self, command: wire.FlowCytometerStopAcquireCommand) -> Tuple[bool, str]:
     """FlowCytometerStopAcquireCommand: stop recording; the instrument keeps acquiring."""

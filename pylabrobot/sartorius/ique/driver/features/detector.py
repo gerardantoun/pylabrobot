@@ -275,9 +275,12 @@ class Detector:
     worklist: Worklist,
     on_progress: Optional[Callable[[RunProgress], None]],
     timeout: Optional[float],
+    finalize_previous: bool,
   ) -> CompletedRun:
     """Run one of the detector's own maintenance routines and wait for it to end."""
-    run = await self._driver.run_worklist(worklist, on_progress=on_progress, timeout=timeout)
+    run = await self._driver.run_worklist(
+      worklist, on_progress=on_progress, timeout=timeout, finalize_previous=finalize_previous
+    )
     logger.info("%s done", worklist.name)
     return run
 
@@ -286,15 +289,19 @@ class Detector:
     *,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Run the detector quick clean, about 11 minutes. The sampler tubing must be installed.
 
-    The detector runs the routine by itself and leaves its fluidics running afterwards.
+    The detector runs the routine by itself and stops its fluidics at the end. The controller
+    needs it ready for fluidics maintenance, not ready to run: faults that block a measurement
+    do not block the routines that clear them.
 
     Args:
       on_progress: Called for the command when it starts and ends.
       timeout: Seconds after which the run is cancelled; cancelling only stops waiting for the
         detector.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
@@ -305,19 +312,23 @@ class Detector:
         needs is not ready.
       WorklistFailedError: The routine did not complete.
     """
-    return await self._clean(detector_quick_clean_worklist(), on_progress, timeout)
+    return await self._clean(
+      detector_quick_clean_worklist(), on_progress, timeout, finalize_previous
+    )
 
   async def long_clean(
     self,
     *,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Run the detector long clean, about 30 minutes; otherwise as :meth:`quick_clean`.
 
     Args:
       on_progress: Called for the command when it starts and ends.
       timeout: Seconds after which the run is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
@@ -327,13 +338,16 @@ class Detector:
       DeviceNotReadyError: The detector or another device the routine needs is not ready.
       WorklistFailedError: The routine did not complete.
     """
-    return await self._clean(detector_long_clean_worklist(), on_progress, timeout)
+    return await self._clean(
+      detector_long_clean_worklist(), on_progress, timeout, finalize_previous
+    )
 
   async def unclog(
     self,
     *,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Run the detector unclog, about 10.5 minutes: when the sample line clogs, and monthly.
 
@@ -342,6 +356,7 @@ class Detector:
     Args:
       on_progress: Called for the command when it starts and ends.
       timeout: Seconds after which the run is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
@@ -351,13 +366,14 @@ class Detector:
       DeviceNotReadyError: The detector or another device the routine needs is not ready.
       WorklistFailedError: The routine did not complete.
     """
-    return await self._clean(detector_unclog_worklist(), on_progress, timeout)
+    return await self._clean(detector_unclog_worklist(), on_progress, timeout, finalize_previous)
 
   async def debubble(
     self,
     *,
     on_progress: Optional[Callable[[RunProgress], None]] = None,
     timeout: Optional[float] = None,
+    finalize_previous: bool = False,
   ) -> CompletedRun:
     """Run the detector debubble, about 13 minutes: the detector primes from its bottles.
 
@@ -366,6 +382,7 @@ class Detector:
     Args:
       on_progress: Called for the command when it starts and ends.
       timeout: Seconds after which the run is cancelled.
+      finalize_previous: Finalise a finished worklist the controller holds first.
 
     Returns:
       The completed run.
@@ -375,7 +392,7 @@ class Detector:
       DeviceNotReadyError: The detector or another device the routine needs is not ready.
       WorklistFailedError: The routine did not complete.
     """
-    return await self._clean(detector_debubble_worklist(), on_progress, timeout)
+    return await self._clean(detector_debubble_worklist(), on_progress, timeout, finalize_previous)
 
   async def reset_consumables_odometer(self, timeout: float = LONG_RUNNING_TIMEOUT) -> None:
     """Clear the detector's record of fluidics consumable run time, as after replacing the

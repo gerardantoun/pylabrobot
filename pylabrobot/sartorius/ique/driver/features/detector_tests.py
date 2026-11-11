@@ -48,6 +48,17 @@ class DetectorTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(status.installation_priming_step, ("None", True))
     self.assertIn("laser", status.summary or "")
 
+  async def test_cleans_run_while_measurements_are_blocked(self) -> None:
+    """A status that blocks measurements but not maintenance lets the detector's own routines
+    run, such as the unclog meant to clear it; a read needs it ready to run."""
+    self.controller.speed = 20000.0
+    self.controller.block_runs("Sample line pressure high")
+    run = await self.detector.unclog()
+    self.assertTrue(run.worklist.all_commands_completed)
+    self.assertIn("cytometer_is_ready_to_clean", self.names())
+    with self.assertRaises(DeviceNotReadyError):
+      await self.driver.run_worklist(plate_worklist(columns=1))
+
   async def test_power_off_and_on(self) -> None:
     """Power off shuts the detector down; power on switches it on and waits for it; both are
     idempotent."""

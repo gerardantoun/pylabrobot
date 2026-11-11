@@ -306,6 +306,23 @@ class PlateRead96DefaultsTests(_WorklistTestCase):
     """The worklist survives being written to and read from the wire unchanged."""
     self.assertEqual(round_trip(self.worklist), self.worklist)
 
+  def test_record_names_the_plate(self) -> None:
+    """The plate model and format travel as the experiment name and the plate number."""
+    self.assertEqual(
+      (self.worklist.experiment_name, self.worklist.plate_number), ("Test 96", "Well96")
+    )
+
+  def test_wells_below_the_deck_are_refused(self) -> None:
+    """A plate model whose wells would be sampled below the deck height is refused."""
+    low = cal.PlateModel("Low 96", well_depth_offset=-1.0)
+    calibration = dataclasses.replace(
+      self.calibration, plate_models=self.calibration.plate_models + (low,)
+    )
+    with self.assertRaisesRegex(ValueError, "below the deck height"):
+      w.plate_read_worklist(
+        calibration, "Well96", ["A01"], w.PlateReadSettings(), plate_model="Low 96"
+      )
+
 
 class PlateRead384DefaultsTests(_WorklistTestCase):
   """A full 384-well plate read in row order with every setting at its default."""
@@ -378,7 +395,7 @@ def all_options_settings() -> w.PlateReadSettings:
     lasers=("blue", "red"),
     event_limit=250_000,
     sip_time=0.8,
-    up_time=0.3,
+    up_time=0.5,
     pump_speed=19.5,
     sampling_height=0.7,
     pre_plate_prime=True,
@@ -495,7 +512,7 @@ class PlateReadAllOptionsTests(_WorklistTestCase):
     self.assertEqual(shake.estimated_duration, seconds(13.8))
 
   def test_wells(self) -> None:
-    """Sampled 0.7 mm above the mapped bottom, 0.8 s down and 0.3 s up."""
+    """Sampled 0.7 mm above the mapped bottom, 0.8 s down and 0.5 s up."""
     samples = [command for command in self.commands if isinstance(command, c.SampleWellCommand)]
     positions = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (1, 3)]
     self.assertEqual(
@@ -504,11 +521,11 @@ class PlateReadAllOptionsTests(_WorklistTestCase):
     )
     for sample, (row, column) in zip(samples, positions):
       self.assertEqual((sample.x, sample.y, sample.z_down), well_xyz_96(row, column, "0.7"))
-      self.assertEqual((sample.sip_time, sample.up_time), (800, 300))
+      self.assertEqual((sample.sip_time, sample.up_time), (800, 500))
     # Long moves from a station, short ones from the well before.
     self.assertEqual(
       [sample.estimated_duration for sample in samples],
-      [seconds(value) for value in (2.1, 1.73, 2.1, 2.1, 2.1, 1.73, 2.1)],
+      [seconds(value) for value in (2.3, 1.93, 2.3, 2.3, 2.3, 1.93, 2.3)],
     )
 
   def test_shakes_between_wells(self) -> None:
@@ -531,12 +548,12 @@ class PlateReadAllOptionsTests(_WorklistTestCase):
       assert isinstance(water, c.CyclingRinseCommand)
       self.assertEqual((decon.rinse_station_name, decon.rinse_duration), ("Decon", 1500))
       self.assertEqual((water.rinse_station_name, water.rinse_duration), ("Water", 2000))
-      self.assertEqual((decon.sip_time, decon.up_time, decon.operation), (800, 300, "Rinse"))
+      self.assertEqual((decon.sip_time, decon.up_time, decon.operation), (800, 500, "Rinse"))
       self.assert_spot(decon.x, decon.y, decon.z_down, ("75.750", "1.500", "206.550"))
       self.assertEqual((decon.rinse_station_pump, water.rinse_station_pump), ("S2", "S4"))
       self.assertEqual((decon.countdown_duration, water.countdown_duration), (1, 2))
-      self.assertEqual(decon.estimated_duration, seconds(2.8))
-      self.assertEqual(water.estimated_duration, seconds(3.3))
+      self.assertEqual(decon.estimated_duration, seconds(3.0))
+      self.assertEqual(water.estimated_duration, seconds(3.5))
 
   def test_flush_and_cleans(self) -> None:
     """A 45 s flush, then Clean 20 s and Water 25 s."""
@@ -549,11 +566,11 @@ class PlateReadAllOptionsTests(_WorklistTestCase):
     self.assertEqual((water.rinse_station_name, water.rinse_duration), ("Water", 25))
 
   def test_estimates(self) -> None:
-    """The acquisition runs 47.56 s and the whole worklist 224.91 s."""
+    """The acquisition runs 49.76 s and the whole worklist 227.11 s."""
     acquire = self.commands[5]
     assert isinstance(acquire, c.FlowCytometerAcquireCommand)
-    self.assertEqual(acquire.estimated_acquisition_time, seconds(47.56))
-    self.assertEqual(w.estimated_duration(self.worklist), seconds(224.91))
+    self.assertEqual(acquire.estimated_acquisition_time, seconds(49.76))
+    self.assertEqual(w.estimated_duration(self.worklist), seconds(227.11))
 
   def test_wire_round_trip(self) -> None:
     """The worklist survives being written to and read from the wire unchanged."""
@@ -940,6 +957,10 @@ class PlateReadSettingsTests(unittest.TestCase):
       {"sip_time": 1.0005},
       {"sip_time": "1"},
       {"up_time": -0.1},
+      {"up_time": 0.0},
+      {"up_time": 0.4},
+      {"transit_delay": 0.5},
+      {"transit_delay": 601.0},
       {"pump_speed": 9.9},
       {"pump_speed": 32.5},
       {"pump_speed": 29.005},
@@ -1550,6 +1571,78 @@ class FlushTargetTests(unittest.TestCase):
   def test_maintenance(self) -> None:
     """A clean has nothing to skip to."""
     self.assertIsNone(w.flush_target(w.probe_and_tubing_clean_worklist(make_calibration())))
+
+  def test_nothing_while_the_command_before_the_flush_runs(self) -> None:
+    """While the last well runs the flush is next: a skip could arrive after the flush started,
+    and the controller would then skip everything after it, so there is no target."""
+    worklist = w.plate_read_worklist(
+      make_calibration(), "Well96", ["A01", "A02"], w.PlateReadSettings(), plate_model="Test 96"
+    )
+    commands = commands_of(worklist)
+    first_well, last_well, flush = commands[4], commands[5], commands[6]
+    self.assertIsInstance(flush, c.FlushMatryoshkaCommand)
+    self.assertIs(w.flush_target(worklist, running=first_well.id), flush)
+    self.assertIsNone(w.flush_target(worklist, running=last_well.id))
+
+  def test_tube_read(self) -> None:
+    """A tube read's flush in a station is its target."""
+    worklist = w.tube_read_worklist(make_calibration(), w.TubeReadSettings())
+    target = w.flush_target(worklist)
+    self.assertIsInstance(target, c.TimedContinuousRinseCommand)
+
+
+class LineStateTests(unittest.TestCase):
+  """What a finished read left in the sample line, and when recording started."""
+
+  def setUp(self) -> None:
+    """Build a two-well plate read: acquisition at 3, wells at 4 and 5, flush at 6, cleans at
+    7 to 9, pump and fluidics off at 10 and 11."""
+    self.worklist = w.plate_read_worklist(
+      make_calibration(), "Well96", ["A01", "A02"], w.PlateReadSettings(), plate_model="Test 96"
+    )
+
+  def test_completed_read(self) -> None:
+    """A completed read flushed its line and left nothing."""
+    done = finish(self.worklist)
+    self.assertFalse(w.sample_left_in_line(done))
+    self.assertTrue(w.line_flushed(done))
+    self.assertFalse(w.cleaning_skipped(done))
+
+  def test_stopped_while_recording(self) -> None:
+    """A read stopped after recording started and before its flush completed left sample."""
+    for stopped_at in (4, 6):
+      with self.subTest(stopped_at=stopped_at):
+        done = finish(self.worklist, stopped_at=stopped_at)
+        self.assertTrue(w.sample_left_in_line(done))
+        self.assertFalse(w.line_flushed(done))
+
+  def test_stopped_before_recording(self) -> None:
+    """A read stopped before recording drew no sample, and flushed nothing either."""
+    done = finish(self.worklist, stopped_at=2)
+    self.assertFalse(w.sample_left_in_line(done))
+    self.assertFalse(w.line_flushed(done))
+
+  def test_cleans_skipped_after_the_flush(self) -> None:
+    """A skip that arrived after the flush started skipped the cleans."""
+    done = finish(self.worklist, skipped=(7, 8, 9, 10, 11))
+    self.assertFalse(w.sample_left_in_line(done))
+    self.assertTrue(w.cleaning_skipped(done))
+    self.assertFalse(w.cleaning_skipped(finish(self.worklist, skipped=(5,))))
+
+  def test_tube_read(self) -> None:
+    """A tube read's flush is the rinse with the probe down in a station."""
+    tube = w.tube_read_worklist(make_calibration(), w.TubeReadSettings())
+    index = next(
+      i for i, command in enumerate(commands_of(tube)) if isinstance(command, c.SampleVialCommand)
+    )
+    self.assertTrue(w.sample_left_in_line(finish(tube, stopped_at=index)))
+    self.assertFalse(w.sample_left_in_line(finish(tube)))
+
+  def test_acquisition_start(self) -> None:
+    """Recording starts with the acquisition command, the fourth: 30 s after the first."""
+    self.assertEqual(w.acquisition_start(finish(self.worklist)), 30.0)
+    self.assertIsNone(w.acquisition_start(finish(self.worklist, stopped_at=1)))
+    self.assertIsNone(w.acquisition_start(self.worklist))
 
 
 if __name__ == "__main__":

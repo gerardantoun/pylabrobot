@@ -1634,6 +1634,120 @@ def write_calibration(calibration: Calibration) -> bytes:
   return data
 
 
+# The instrument record, and the deck height and its date within it.
+_INSTRUMENT_RECORD = re.compile(r"<HyperCyt>.*?</HyperCyt>", re.DOTALL)
+_DECK_HEIGHT_ELEMENT = re.compile(r"<ZLow>[^<]*</ZLow>")
+_DECK_DATE_ELEMENT = re.compile(
+  r"<ZLowLastCalibratedOn(?:\s[^>]*)?(?:/>|>[^<]*</ZLowLastCalibratedOn>)"
+)
+
+
+def _text_encoding(document: bytes) -> Tuple[str, bytes]:
+  """Return the codec and the byte-order mark of the bytes of an XML document."""
+  for mark, codec in (
+    (b"\xef\xbb\xbf", "utf-8"),
+    (b"\xff\xfe", "utf-16-le"),
+    (b"\xfe\xff", "utf-16-be"),
+  ):
+    if document.startswith(mark):
+      return codec, mark
+  return "utf-8", b""
+
+
+def _only_match(pattern: re.Pattern[str], text: str, what: str) -> re.Match[str]:
+  """Return the one match of a pattern in a text.
+
+  Raises:
+    CalibrationFormatError: If there is no match or more than one.
+  """
+  matches = list(pattern.finditer(text))
+  if len(matches) != 1:
+    raise CalibrationFormatError(f"the file has {len(matches)} {what}, not one")
+  return matches[0]
+
+
+def patch_deck_height(data: bytes, deck_height: float, measured_on: datetime.datetime) -> bytes:
+  """Return a calibration file with a new deck height, changed in place.
+
+  Only two values change: the text of ``ZLow`` and of ``ZLowLastCalibratedOn`` in the
+  instrument record of ``Calibration.xml``. Every other byte of that document stays as it is,
+  in its own encoding, and every other entry of the archive keeps its content. Unlike writing
+  the calibration anew, this leaves whatever the instrument's own software wrote untouched.
+
+  Args:
+    data: The instrument's calibration file, of the current content version.
+    deck_height: The new deck height in mm.
+    measured_on: When it was measured.
+
+  Returns:
+    The bytes of the new file.
+
+  Raises:
+    CalibrationFormatError: If the data is not a calibration file of the current version, or
+      its instrument record does not hold the deck height and its date once each.
+    CalibrationError: If the patched file does not read back as the original with only the deck
+      height and its date changed, or is larger than the instrument accepts.
+  """
+  original = read_calibration(data)
+  entry_bytes = _extract_document(data)
+  codec, mark = _text_encoding(entry_bytes)
+  try:
+    text = entry_bytes[len(mark) :].decode(codec)
+  except UnicodeDecodeError as error:
+    raise CalibrationFormatError(f"{ENTRY_NAME} is not {codec} text: {error}") from error
+  if _parse_document(text, ENTRY_NAME).tag != CURRENT_ROOT:
+    raise CalibrationFormatError(
+      f"only a file of the current content version ({CURRENT_ROOT}) can be changed in place"
+    )
+  record = _only_match(_INSTRUMENT_RECORD, text, "instrument records")
+  inside = record.group(0)
+  height = _only_match(_DECK_HEIGHT_ELEMENT, inside, "deck heights in the instrument record")
+  date = _only_match(_DECK_DATE_ELEMENT, inside, "deck height dates in the instrument record")
+  replacements = sorted(
+    [
+      (height.start(), height.end(), f"<ZLow>{_millimetres_text(deck_height)}</ZLow>"),
+      (
+        date.start(),
+        date.end(),
+        f"<ZLowLastCalibratedOn>{_timestamp_text(measured_on)}</ZLowLastCalibratedOn>",
+      ),
+    ]
+  )
+  patched_record = inside
+  for start, end, replacement in reversed(replacements):
+    patched_record = patched_record[:start] + replacement + patched_record[end:]
+  patched_text = text[: record.start()] + patched_record + text[record.end() :]
+  patched_entry = mark + patched_text.encode(codec)
+  buffer = io.BytesIO()
+  with zipfile.ZipFile(io.BytesIO(data)) as source:
+    with zipfile.ZipFile(buffer, "w", allowZip64=False) as archive:
+      for info in source.infolist():
+        copy = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+        copy.compress_type = info.compress_type
+        copy.create_system = info.create_system
+        copy.external_attr = info.external_attr
+        copy.comment = info.comment
+        is_document = info.filename.lower() == ENTRY_NAME.lower()
+        archive.writestr(copy, patched_entry if is_document else source.read(info))
+  result = buffer.getvalue()
+  if len(result) > MAX_FILE_SIZE:
+    raise CalibrationError(
+      f"the calibration file is {len(result)} bytes; the instrument accepts {MAX_FILE_SIZE}"
+    )
+  expected = dataclasses.replace(
+    original,
+    instrument=dataclasses.replace(
+      original.instrument, deck_height=deck_height, deck_height_calibrated_on=measured_on
+    ),
+  )
+  if read_calibration(result) != expected:
+    raise CalibrationError(
+      "the file with the new deck height does not read back as the original with only the "
+      "deck height and its date changed"
+    )
+  return result
+
+
 # ---------------------------------------------------------------------------------------------
 # Coordinates
 # ---------------------------------------------------------------------------------------------

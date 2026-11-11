@@ -1,8 +1,10 @@
 """The peristaltic pump that draws sample from the probe to the detector.
 
 Speeds are rpm; the controller takes hundredths of rpm and would clamp a speed outside the
-pump's range, which the driver refuses instead. The pump turns clockwise when it sits on the
-right of the instrument, which the calibration records.
+pump's range, which the driver refuses instead. The pump itself turns up to 160 rpm, but the
+instrument never runs it faster than :data:`MAX_PUMP_SPEED`, its priming speed, and neither does
+the driver. The pump turns clockwise when it sits on the right of the instrument, which the
+calibration records.
 """
 
 from __future__ import annotations
@@ -20,6 +22,10 @@ logger = logging.getLogger(__name__)
 PumpRotation = Literal["clockwise", "counterclockwise"]
 
 _DIRECTIONS: Dict[PumpRotation, PumpDirection] = {"clockwise": "CW", "counterclockwise": "CCW"}
+
+MAX_PUMP_SPEED = 53.0
+"""The highest pump speed in rpm: the instrument's own priming speed, the fastest it runs the
+pump at."""
 
 
 def wire_speed(rpm: float) -> int:
@@ -43,9 +49,10 @@ class Pump:
 
   @property
   def speed_range(self) -> Tuple[float, float]:
-    """The pump's lowest and highest speed in rpm, as it reported them at setup."""
+    """The lowest and highest speed in rpm: the pump's lowest as it reported it at setup, and
+    its highest or :data:`MAX_PUMP_SPEED`, whichever is lower."""
     limits = self._driver.require_limits()
-    return limits.pump_min_speed, limits.pump_max_speed
+    return limits.pump_min_speed, min(limits.pump_max_speed, MAX_PUMP_SPEED)
 
   @property
   def default_speed(self) -> float:

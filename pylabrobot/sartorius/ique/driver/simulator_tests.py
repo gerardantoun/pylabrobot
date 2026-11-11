@@ -2,6 +2,7 @@
 worklists by hand for the other tests."""
 
 import asyncio
+import dataclasses
 import datetime
 import decimal
 import unittest
@@ -421,6 +422,97 @@ class SimulatorBehaviourTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(fault.reason, "message")
     assert fault.detail is not None
     self.assertEqual(fault.detail.message, "message")
+
+  async def test_motion_takes_time(self) -> None:
+    """A Z move returns before the probe arrives; a rail move and parking return once done."""
+    driver, controller = await simulated_driver()
+    await controller.sampler_move_z(D("200"))
+    self.assertGreater(controller.probe_position[2], 200.0)
+    while controller.probe_position[2] > 200.0:
+      await asyncio.sleep(0.001)
+    await controller.sampler_home()
+    self.assertEqual(controller.probe_position, (131.0, 195.0, 250.0))
+    await controller.plate_rail_load()
+    self.assertEqual(controller.rail_position, "loaded")
+    self.assertEqual(controller.collisions, [])
+    await controller.shutdown()
+
+  async def test_initialisation_is_concurrent(self) -> None:
+    """Initialising the sampler and the rail in one call moves the rail while the probe still
+    rises: a probe left down over the plate collides."""
+    controller = SimulatedController(speed=FAST)
+    await controller.open()
+    await controller.controller_connect(datetime.datetime.now().astimezone())
+    optional: Tuple[DeviceKind, ...] = ("Shaker", "Cytometer", "PlateRail", "ContactSensor")
+    await controller.controller_configure_devices(
+      {
+        kind: wire.DeviceConfiguration(configuration=None, include_this_device=True)
+        for kind in optional
+      }
+    )
+    await controller.controller_reset_devices(None)
+    controller._rail = "loaded"
+    controller._x, controller._y, controller._z = 50.0, 80.0, 204.0
+    await controller.controller_initialize_devices([])
+    self.assertTrue(controller.collisions)
+    self.assertIn("the plate rail started moving", controller.collisions[0])
+    await controller.shutdown()
+
+  async def test_the_flush_ejects_while_the_probe_rises(self) -> None:
+    """The flush moves the rail out at once: after a well with no up time the probe is still
+    in the plate."""
+    driver, controller = await simulated_driver(seed=3)
+    worklist = plate_worklist(columns=1)
+    commands = list(worklist.commands or [])
+    well = commands[3]
+    assert isinstance(well, wire.SampleWellCommand)
+    commands[3] = dataclasses.replace(well, up_time=0)
+    await driver.run_worklist(dataclasses.replace(worklist, commands=commands))
+    self.assertTrue(controller.collisions)
+    controller.collisions.clear()
+    await driver.run_worklist(plate_worklist(columns=1))
+    self.assertEqual(controller.collisions, [])
+    await controller.shutdown()
+
+  async def test_blank_wells_carry_over_and_station_events(self) -> None:
+    """Blank wells give no events, carry-over arrives after recording starts, and station dips
+    give events at their own rate, also before recording starts."""
+    driver, controller = await simulated_driver(seed=3, blank_wells=["A01"], carry_over=[25.0])
+    run = await driver.run_worklist(plate_worklist(columns=3))
+    assert run.events is not None
+    times = list(event_times(run.events))
+    burst = [time for time in times if 25.0 <= time < 26.0]
+    self.assertGreater(len(burst), 200)
+    wells = sampled_wells(run)
+    first = wells[0].start + 39.0
+    self.assertLess(len([time for time in times if first <= time < first + 1.0]), 5)
+    await controller.shutdown()
+    driver, controller = await simulated_driver(
+      seed=3, station_events_per_second=200.0, transit_delay=20.0, blank_wells=["A01"]
+    )
+    ids = CommandIds()
+    rinse = wire.TimedCyclingRinseCommand(**dataclasses.asdict(flush(ids, seconds=10)))
+    wait = dataclasses.replace(sample_well(ids, 1), sip_time=40_000)
+    worklist = make_worklist(
+      [start_fluidics(ids), start_pump(ids), rinse, acquire(ids), wait]
+      + [stop_pump(ids), stop_fluidics(ids)]
+    )
+    run = await driver.run_worklist(worklist)
+    assert run.events is not None
+    # The Buffer dips before recording reach the detector 20 s later, while A01, blank, is
+    # sampled.
+    self.assertGreater(run.events.event_count, 100)
+    await controller.shutdown()
+
+  async def test_runs_blocked_but_not_maintenance(self) -> None:
+    """A status that blocks runs makes the detector not ready to run, but ready to clean."""
+    driver, controller = await simulated_driver()
+    controller.block_runs("Laser warming up")
+    self.assertFalse(await controller.cytometer_is_ready_to_run())
+    self.assertTrue(await controller.cytometer_is_ready_to_clean())
+    controller.block_runs(None)
+    self.assertTrue(await controller.cytometer_is_ready_to_run())
+    await controller.shutdown()
 
   def test_simulator_satisfies_the_client_protocol(self) -> None:
     """The simulator has the client's interface (checked by the type checker, too)."""

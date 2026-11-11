@@ -1,12 +1,13 @@
 """The IntelliCyt / Sartorius iQue Screener PLUS plate-sampling flow cytometer."""
 
-from .device import IQue, IQueDevice, IQuePlateHolder
+from .device import IQue, IQueDevice, IQuePlateHolder, RecoveredRun
 from .driver.calibration import (
   Calibration,
   CalibrationError,
   CalibrationFormatError,
   PlateFormat,
   nominal_calibration,
+  patch_deck_height,
   read_calibration,
   with_deck_height,
   write_calibration,

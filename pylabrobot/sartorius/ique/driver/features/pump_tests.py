@@ -33,8 +33,9 @@ class PumpTests(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(wire_speed(1.605), 160)
 
   async def test_limits(self) -> None:
-    """The pump's range and default come from the controller, in rpm."""
-    self.assertEqual(self.pump.speed_range, (1.6, 160.0))
+    """The pump's range and default come from the controller, in rpm; the highest speed is
+    the instrument's own priming speed, 53 rpm, below the pump's 160 rpm."""
+    self.assertEqual(self.pump.speed_range, (1.6, 53.0))
     self.assertEqual(self.pump.default_speed, 28.6)
 
   async def test_start(self) -> None:
@@ -62,7 +63,7 @@ class PumpTests(unittest.IsolatedAsyncioTestCase):
 
   async def test_out_of_range(self) -> None:
     """A speed outside the pump's range is refused, not clamped."""
-    for speed in (1.0, 200.0):
+    for speed in (1.0, 53.5, 200.0):
       with self.assertRaises(ValueError):
         await self.pump.start(speed)
     self.assertNotIn("pump_start", self.names())

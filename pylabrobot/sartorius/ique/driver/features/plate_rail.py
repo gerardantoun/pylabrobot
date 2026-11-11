@@ -6,14 +6,19 @@ ejected after initialisation and after every worklist, and wherever the last mov
 feature took it; while it moves, or after it faulted, the position is not known.
 
 The controller does not check where the probe is before it moves the rail. The driver refuses a
-rail move unless the probe is parked and reports no contact, and closes the shaker's plate lock
-before loading, as the controller itself does before it loads the rail during a worklist.
+rail move unless the probe is parked and reports no contact and the shaker stands still, and
+closes the shaker's plate lock before loading, as the controller itself does before it loads the
+rail during a worklist. Ejecting needs only the rail, the sampler and the shaker in order, so
+that a fault elsewhere (a shaker whose open lock closed itself, say) does not keep a plate
+inside.
 """
 
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Literal, Optional
+
+from pylabrobot.sartorius.ique.driver.errors import DeviceNotReadyError, UnsafeMotionError
 
 if TYPE_CHECKING:
   from pylabrobot.sartorius.ique.driver.master import IQueDriver
@@ -52,13 +57,22 @@ class PlateRail:
 
     Raises:
       WorklistActiveError: A worklist runs.
-      DeviceFaultedError: A mechanical device is faulted, or the rail faulted while moving.
-      DeviceNotReadyError: The rail, or for a load the shaker, is not ready.
-      UnsafeMotionError: The probe is not parked or reports contact.
+      DeviceFaultedError: For a load a mechanical device is faulted, for an eject the rail; or
+        the rail faulted while moving.
+      DeviceNotReadyError: The rail or the sampler, or for a load the shaker, is not ready.
+      UnsafeMotionError: The probe is not parked or reports contact, or the shaker shakes.
     """
     driver = self._driver
-    action = "load the plate rail" if target == "loaded" else "eject the plate rail"
-    await driver.require_direct_operation(action, "PlateRail")
+    loading = target == "loaded"
+    action = "load the plate rail" if loading else "eject the plate rail"
+    await driver.require_direct_operation(action, "PlateRail", check_other_devices=loading)
+    devices = driver.devices
+    sampler = devices.get("Sampler")
+    if sampler is None or sampler.state != "Ready":
+      raise DeviceNotReadyError(action, "Sampler", sampler)
+    shaker = devices.get("Shaker")
+    if shaker is not None and shaker.state == "Running":
+      raise UnsafeMotionError(f"cannot {action}: the shaker shakes; stop it with shaker.stop()")
     await driver.sampler.require_parked(action)
     if target == "loaded":
       await driver.shaker.lock_plate()
@@ -75,18 +89,21 @@ class PlateRail:
     Raises:
       WorklistActiveError: A worklist runs.
       DeviceFaultedError: A mechanical device is faulted, or the rail faulted while moving.
-      DeviceNotReadyError: The rail or the shaker is not ready (a shaking shaker is not).
-      UnsafeMotionError: The probe is not parked or reports contact.
+      DeviceNotReadyError: The rail, the sampler or the shaker is not ready.
+      UnsafeMotionError: The probe is not parked or reports contact, or the shaker shakes.
     """
     await self._move("loaded")
 
   async def eject(self) -> None:
     """Move the rail out (at most 15 s).
 
+    Only the rail, the sampler and the shaker are checked: a fault of another device, or of
+    the shaker, does not keep the plate inside.
+
     Raises:
       WorklistActiveError: A worklist runs.
-      DeviceFaultedError: A mechanical device is faulted, or the rail faulted while moving.
-      DeviceNotReadyError: The rail is not ready.
-      UnsafeMotionError: The probe is not parked or reports contact.
+      DeviceFaultedError: The rail is faulted, or it faulted while moving.
+      DeviceNotReadyError: The rail or the sampler is not ready.
+      UnsafeMotionError: The probe is not parked or reports contact, or the shaker shakes.
     """
     await self._move("ejected")

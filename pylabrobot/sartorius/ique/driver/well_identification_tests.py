@@ -832,11 +832,16 @@ class DistortedPeakTests(unittest.TestCase):
     self.assertEqual(found_ranges(result), {"A": (0, 199), "B": (200, 399), "C": (400, 599)})
     self.assertEqual([well.start_time for well in result.wells], [30.0, 31.4, 39.9])
     # Less their commands' starts the wells start at 30.0, 28.9 and 34.9 s. B and C are more
-    # than 0.675 s (0.45 of sip plus up) from the median, 30.0 s.
+    # than 0.675 s (0.45 of sip plus up) from the median, 30.0 s. And slid by two periods the
+    # run would leave A's and B's windows for C's peak and an empty one: as good a fit.
     self.assertEqual(result.verdict, "needs_review")
     self.assertEqual(result.flagged_wells, ())
-    self.assertEqual(result.inconsistent_wells, ("B", "C"))
-    self.assertEqual(result.message, "2 of 3 wells failed a check: B (timing), C (timing)")
+    self.assertEqual(result.inconsistent_wells, ("A", "B", "C"))
+    self.assertEqual(
+      result.message,
+      "3 of 3 wells failed a check: A (ambiguous_anchor), B (timing and ambiguous_anchor), "
+      "C (timing and ambiguous_anchor)",
+    )
 
   def bridged(self, run: PlateRun, well: str, per_tick: int) -> Tuple[array.array, int]:
     """Return the run's events with the air gap after a well filled in, and the fill's size."""
@@ -883,19 +888,22 @@ class DistortedPeakTests(unittest.TestCase):
       self.assertEqual(found[name], (first + fill, last + fill))
 
   def test_two_wells_merged_flat_fail_the_checks(self) -> None:
-    """The well that took both and the wells that slipped are named."""
-    # D07's peak is 3.5 sips wide; D08 to D11 each start one well, 2.5 s, late.
+    """The well that took both and the wells that slipped are named, and so is the whole row,
+    whose last well has no peak."""
+    # D07's peak is 3.5 sips wide; D08 to D11 each start one well, 2.5 s, late; D12 is left
+    # without a peak, so row D may be a well late.
     run = PlateRun()
     times, _ = self.bridged(run, "D07", per_tick=2)
     result = run.identify(times)
-    self.assertEqual(result.inconsistent_wells, ("D07", "D08", "D09", "D10", "D11"))
-    self.assertEqual(result.wells[42].failed_checks, ("width",))
-    self.assertEqual(result.wells[43].failed_checks, ("timing",))
-    self.assertEqual(
-      result.message,
-      "1 of 96 wells were placed by timing because no peak was found for them: D12; "
-      "5 of 96 wells failed a check: D07 (width), D08 (timing), D09 (timing), D10 (timing), "
-      "D11 (timing)",
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("D", range(1, 12))))
+    self.assertEqual(result.wells[36].failed_checks, ("run_shift",))
+    self.assertEqual(result.wells[42].failed_checks, ("width", "run_shift"))
+    self.assertEqual(result.wells[43].failed_checks, ("timing", "run_shift"))
+    self.assertTrue(
+      result.message.startswith(
+        "1 of 96 wells were placed by timing because no peak was found for them: D12; "
+        "11 of 96 wells failed a check: D01 (run_shift), "
+      )
     )
 
 
@@ -989,15 +997,17 @@ class WrongAssignmentTests(unittest.TestCase):
       wrong_ranges(result, run), row_wells("C", range(5, 13)) + row_wells("D", range(1, 8))
     )
     # The median sides with the majority of a run. Most of row C is a well late, so the four
-    # wells before C05 are named, and C12, which took D01's peak after the shake. Row D is
-    # split about evenly, its median lies between the two, and every well of it is named.
+    # wells before C05 fail the timing check, and C12, which took D01's peak after the shake.
+    # Row D is split about evenly, its median lies between the two, and every well of it
+    # fails. Both rows fit the events nearly as well slid by a well, so all of them are named.
     self.assertEqual(result.verdict, "needs_review")
     self.assertEqual(
-      result.inconsistent_wells,
-      tuple(row_wells("C", [1, 2, 3, 4, 12]) + row_wells("D", range(1, 13))),
+      result.inconsistent_wells, tuple(row_wells("C", range(1, 13)) + row_wells("D", range(1, 13)))
     )
+    timing = [well.well for well in result.wells if "timing" in well.failed_checks]
+    self.assertEqual(timing, row_wells("C", [1, 2, 3, 4, 12]) + row_wells("D", range(1, 13)))
     # D06's piece of D07 is 0.3 sips wide.
-    self.assertEqual(result.wells[41].failed_checks, ("timing", "width"))
+    self.assertEqual(result.wells[41].failed_checks, ("timing", "width", "ambiguous_anchor"))
 
   def test_an_empty_well_and_noise_paired_in_order(self) -> None:
     """One peak per well, from an empty well and a burst of noise, fails the timing check."""
@@ -1013,12 +1023,15 @@ class WrongAssignmentTests(unittest.TestCase):
     self.assertEqual(found["E02"], run.ranges["E03"])
     first, last = run.ranges["E04"] or (0, 0)
     self.assertEqual(found["E04"], (first + len(noise), last + len(noise)))
-    # Row D is all a well late and keeps its spacing; only D12, which took E01's peak after the
-    # shake, is named. E03's noise is 0.3 sips wide.
+    # Row D is all a well late and keeps its spacing: only D12, which took E01's peak after
+    # the shake, fails the timing check, but the row fits the events as well slid back a well,
+    # so every well of it is named. E03's noise is 0.3 sips wide.
     self.assertEqual(result.verdict, "needs_review")
     self.assertEqual(
       result.inconsistent_wells,
-      tuple(row_wells("C", [1, 2, 3, 4, 12]) + ["D12"] + row_wells("E", [1, 2, 3])),
+      tuple(
+        row_wells("C", range(1, 13)) + row_wells("D", range(1, 13)) + row_wells("E", [1, 2, 3])
+      ),
     )
     self.assertEqual(result.wells[50].failed_checks, ("timing", "width"))
 
@@ -1026,29 +1039,37 @@ class WrongAssignmentTests(unittest.TestCase):
     """With short up and move times an empty well takes its neighbour's peak."""
     # Sip 0.5 s, up 0.2 s, move 0.3 s: B09 is looked for over its 0.8 s and 0.5 s either side,
     # which reaches B10's peak. B09 to B11 each take the next well's peak and B12 is flagged.
+    # B12 is left without a peak, so the whole row is named.
     run = PlateRun(sip=0.5, up=0.2, move=0.3, empty=("B09",))
     result = run.identify()
     self.assertEqual(wrong_ranges(result, run), row_wells("B", range(9, 13)))
     self.assertEqual(result.flagged_wells, ("B12",))
-    self.assertEqual(result.inconsistent_wells, tuple(row_wells("B", [9, 10, 11])))
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("B", range(1, 12))))
+    timing = [well.well for well in result.wells if "timing" in well.failed_checks]
+    self.assertEqual(timing, row_wells("B", [9, 10, 11]))
     # With B05 empty most of row B slips, and the median names the four wells still in place.
     run = PlateRun(sip=0.5, up=0.2, move=0.3, empty=("B05",))
     result = run.identify()
     self.assertEqual(wrong_ranges(result, run), row_wells("B", range(5, 13)))
     self.assertEqual(result.flagged_wells, ("B12",))
-    self.assertEqual(result.inconsistent_wells, tuple(row_wells("B", [1, 2, 3, 4])))
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("B", range(1, 12))))
 
-  def test_a_whole_run_one_well_late_keeps_its_spacing(self) -> None:
-    """A run that is all one well off passes the checks; only its last well is flagged."""
+  def test_a_whole_run_one_well_late_is_named(self) -> None:
+    """A run that is all one well off keeps its spacing; its last well has no peak, and every
+    well of it is named."""
     # A run's offset is set anew after every pause, so a run one well late cannot be told
-    # from one after a longer pause whose last well is empty.
+    # from one after a longer pause whose last well is empty: the run is named either way.
     run = PlateRun(empty=("F01",))
     result = run.identify()
     self.assertEqual(wrong_ranges(result, run), row_wells("F", range(1, 13)))
-    self.assertEqual((result.flagged_wells, result.inconsistent_wells), (("F12",), ()))
-    # With A01 empty every run is one well late.
-    result = PlateRun(empty=("A01",)).identify()
-    self.assertEqual(result.inconsistent_wells, ())
+    self.assertEqual(result.flagged_wells, ("F12",))
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("F", range(1, 12))))
+    self.assertEqual(result.wells[60].failed_checks, ("run_shift", "ambiguous_anchor"))
+    # With A01 empty every run is one well late, and every well found is named.
+    run = PlateRun(empty=("A01",))
+    result = run.identify()
+    self.assertEqual(misplaced_unnamed(result, run), [])
+    self.assertEqual(len(result.inconsistent_wells), 88)
     self.assertEqual(result.verdict, "needs_review")
 
 
@@ -1104,9 +1125,6 @@ class FalseAlarmTests(unittest.TestCase):
     cases: List[Tuple[str, ...]] = [
       ("C05",),
       ("C05", "C06"),
-      ("A12",),
-      ("H12",),
-      ("B01", "B02"),
       tuple(row_wells("D", range(1, 13))),
       tuple(row_wells("G", range(1, 13)) + row_wells("H", range(1, 13))),
     ]
@@ -1124,6 +1142,134 @@ class FalseAlarmTests(unittest.TestCase):
       run = random_clean_run(rng)
       with self.subTest(read=index, sip=run.sip, up=run.up):
         self.assertEqual(self.assert_passes(run).verdict, "identified")
+
+
+def misplaced_unnamed(result: wid.WellIdentification, run: PlateRun) -> List[str]:
+  """Return the wells not given their own events and not named: neither flagged nor failing a
+  check."""
+  named = set(result.flagged_wells) | set(result.inconsistent_wells)
+  return [well for well in misplaced_wells(result, run) if well not in named]
+
+
+class AmbiguousRunTests(unittest.TestCase):
+  """Runs the events cannot place, and how a measured transit delay places them."""
+
+  def test_empty_wells_at_the_ends_of_runs_name_their_run(self) -> None:
+    """An empty well at an end of a run leaves the run indistinguishable from one shifted by a
+    well: the run is named."""
+    cases: List[Tuple[Tuple[str, ...], List[str], Tuple[str, ...]]] = [
+      (("A12",), row_wells("A", range(1, 12)), ("run_shift", "ambiguous_anchor")),
+      (("H12",), row_wells("H", range(1, 12)), ("run_shift", "ambiguous_anchor")),
+      (("B01", "B02"), row_wells("B", range(3, 13)), ("ambiguous_anchor",)),
+    ]
+    for empty, named, checks in cases:
+      with self.subTest(empty=empty):
+        run = PlateRun(empty=empty)
+        result = run.identify()
+        self.assertEqual(misplaced_wells(result, run), [])
+        self.assertEqual(result.flagged_wells, empty)
+        self.assertEqual(result.inconsistent_wells, tuple(named))
+        self.assertEqual(
+          set(result.wells[well_names(8, 12).index(named[0])].failed_checks), set(checks)
+        )
+
+  def test_misplaced_wells_are_always_named(self) -> None:
+    """Random reads with an empty well at the start or end of a run: every well that did not
+    get its own events is flagged or named."""
+    rng = random.Random(1111)
+    for index in range(20):
+      column = rng.choice([1, 2, 11, 12])
+      row = rng.choice("ABCDEFGH")
+      run = PlateRun(
+        sip=rng.randint(8, 20) / 10,
+        up=rng.randint(5, 10) / 10,
+        move=rng.uniform(0.6, 1.5),
+        pause=rng.uniform(2.0, 10.0),
+        transit=rng.uniform(21.0, 40.0),
+        empty=(f"{row}{column:02d}",),
+        rng=rng,
+        jitter=0.05,
+      )
+      with self.subTest(read=index, empty=run.wells and f"{row}{column:02d}"):
+        result = run.identify()
+        self.assertEqual(misplaced_unnamed(result, run), [])
+        self.assertEqual(result.verdict, "needs_review")
+
+  def identify_with_transit(self, run: PlateRun, times: Sequence[float], transit: float):
+    """Identify with a transit delay; the run's event clock is its command clock."""
+    return wid.identify_wells(
+      times, run.wells, run.sip, run.up, transit_delay=transit, acquisition_start=0.0
+    )
+
+  def test_carry_over_before_the_first_well(self) -> None:
+    """Sample left in the line, arriving after 20 s and before the first well, shifts the first
+    run without a transit delay, and every shifted well is named; with one it is dropped."""
+    run = PlateRun(rows=1, columns=12)
+    # A01's command starts at 3 s, its events arrive at 29 s: a transit delay of 26 s.
+    self.assertAlmostEqual(run.sip_starts["A01"], 29.0)
+    bursts = [
+      start + tick * TICK for start in (20.5, 23.0) for tick in range(200) for _ in range(2)
+    ]
+    times = array.array("f", sorted(bursts + list(run.times)))
+    without = run.identify(times)
+    self.assertNotEqual(misplaced_wells(without, run), [])
+    self.assertEqual(misplaced_unnamed(without, run), [])
+    with_transit = self.identify_with_transit(run, times, 26.0)
+    self.assertEqual(with_transit.verdict, "identified", with_transit.message)
+    first, last = run.ranges["A01"] or (0, 0)
+    self.assertEqual(with_transit.wells[0].event_range, (first + len(bursts), last + len(bursts)))
+
+  def test_carry_over_just_before_the_first_well(self) -> None:
+    """Carry-over within the margin before the prediction is kept, but the first well is not
+    placed on it. Exactly a sampling period before the first well, it looks as a well would
+    with the transit delay a period too long, and the run is named."""
+    run = PlateRun(rows=1, columns=12)
+    bursts = [27.3 + tick * TICK for tick in range(120) for _ in range(2)]
+    result = self.identify_with_transit(
+      run, array.array("f", sorted(bursts + list(run.times))), 26.0
+    )
+    self.assertEqual(result.verdict, "identified", result.message)
+    self.assertEqual(result.wells[0].start_time, 28.9)
+    aligned = [26.5 + tick * TICK for tick in range(200) for _ in range(2)]
+    result = self.identify_with_transit(
+      run, array.array("f", sorted(aligned + list(run.times))), 26.0
+    )
+    self.assertEqual(result.wells[0].start_time, 28.9)
+    self.assertEqual(result.inconsistent_wells, tuple(row_wells("A", range(1, 13))))
+
+  def test_blank_first_well(self) -> None:
+    """With the first well blank, every well takes its neighbour's events and the plate is
+    named, unless a transit delay places the first well: then it alone is flagged."""
+    run = PlateRun(empty=("A01",))
+    self.assertEqual(misplaced_unnamed(run.identify(), run), [])
+    result = self.identify_with_transit(run, run.times, 26.0)
+    self.assertEqual(result.flagged_wells, ("A01",))
+    self.assertEqual(misplaced_wells(result, run), [])
+    # The other rows are matched anew after each shake; only the first run is placed.
+    self.assertEqual(result.inconsistent_wells, ())
+
+  def test_a_wrong_transit_delay_is_not_trusted(self) -> None:
+    """A transit delay a sampling period off places the first run a well wrong; the run is
+    named instead of exempted."""
+    run = PlateRun(rows=1, columns=12)
+    result = self.identify_with_transit(run, run.times, 26.0 + 2.5)
+    self.assertEqual(result.verdict, "needs_review")
+    self.assertEqual(misplaced_unnamed(result, run), [])
+
+  def test_clean_reads_with_a_transit_delay(self) -> None:
+    """Clean reads with their transit delay pass."""
+    for run in (PlateRun(), PlateRun(rows=16, columns=24, sip=0.5, up=0.4, move=0.6, pause=3.0)):
+      result = self.identify_with_transit(run, run.times, run.sip_starts[run.wells[0].well] - 3.0)
+      self.assertEqual(result.verdict, "identified", result.message)
+      self.assertEqual(misplaced_wells(result, run), [])
+
+  def test_transit_arguments(self) -> None:
+    """A transit delay needs the acquisition start, and must be positive."""
+    run = PlateRun(rows=1, columns=6)
+    with self.assertRaisesRegex(ValueError, "acquisition start"):
+      wid.identify_wells(run.times, run.wells, run.sip, run.up, transit_delay=26.0)
+    with self.assertRaisesRegex(ValueError, "positive"):
+      self.identify_with_transit(run, run.times, 0.0)
 
 
 class FailureTests(unittest.TestCase):
