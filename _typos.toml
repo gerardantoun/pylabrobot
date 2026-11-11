@@ -51,6 +51,14 @@ tranformation = "tranformation"
 IY = "IY"
 IZ = "IZ"
 
+# iQue controller vocabulary. `AcquistionDelay` is a data member name of the
+# controller's service contract; renaming it changes the message and the
+# controller would ignore the value. `OAUT` is part of the specification name
+# [MS-OAUT], which defines the date format the protocol uses.
+Acquistion = "Acquistion"
+acquistion = "acquistion"
+OAUT = "OAUT"
+
 # glTF material property, the name three.js and the glTF spec use for it.
 metalness = "metalness"
 
@@ -69,4 +77,6 @@ extend-exclude = [
     "*.ipynb",
     # Third-party libraries, shipped as their authors minified them.
     "pylabrobot/visualizer3D/static/vendor/**",
+    # Bytes recorded from .NET's WCF stack: hex and the test strings it carried.
+    "pylabrobot/sartorius/ique/driver/wcf/recordings/*.json",
 ]
