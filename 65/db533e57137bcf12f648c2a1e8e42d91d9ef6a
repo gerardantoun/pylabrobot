@@ -1,0 +1,56 @@
+pylabrobot/sartorius/ique/driver/recordings/__init__.py
+  s_57312d54dca954::t_cc9f718a2b31bb 1-165
+  s_57312d54dca954::t_16c18723d492e4 166-168
+  s_7e3084538850e2::t_50406505f6f085 169-175
+pylabrobot/sartorius/ique/driver/contract_tests.py
+  s_57312d54dca954::t_5da9acb784a609 1-396
+  s_57312d54dca954::t_8fe8941a7b33f4 397-399
+  s_7e3084538850e2::t_94d058e387e1f3 400-441
+pylabrobot/sartorius/ique/driver/client_tests.py
+  s_57312d54dca954::t_5b95531d2e12c9 1-373,377-468
+  s_57312d54dca954::t_39c07f45ba2653 374-376
+  s_57312d54dca954::t_862cff209fb442 469-471
+  s_7e3084538850e2::t_98544a667fab19 472-477
+pylabrobot/sartorius/ique/driver/client.py
+  s_2371c6098680b6::t_05ce0e0b6610aa 1-1991
+pylabrobot/sartorius/ique/driver/contract.py
+  s_2371c6098680b6::t_ee238c207a7e6a 1-3917
+pylabrobot/sartorius/ique/driver/recordings/controller_session.json
+  s_7e3084538850e2::t_4a790fb471de8e 1-3002
+pylabrobot/sartorius/ique/driver/recordings/controller_streaming.json
+  s_7e3084538850e2::t_a47c96952487db 1-391
+pylabrobot/sartorius/ique/driver/recordings/watchdog.json
+  s_7e3084538850e2::t_cdd241ab470be0 1-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65db533e57137bcf12f648c2a1e8e42d91d9ef6a",
+  "prompts": {},
+  "sessions": {
+    "s_2371c6098680b6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a849451fa80d39d16",
+        "model": "unknown"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    },
+    "s_57312d54dca954": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51df9345-a58b-4a96-a661-fabb91bff2f8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    },
+    "s_7e3084538850e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aaa386e336927e0d2",
+        "model": "unknown"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
