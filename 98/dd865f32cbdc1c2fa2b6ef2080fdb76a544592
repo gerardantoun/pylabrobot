@@ -1,0 +1,90 @@
+pylabrobot/sartorius/ique/driver/simulator.py
+  s_57312d54dca954::t_6b45a0bd15568c 200-201
+  s_57312d54dca954::t_3e786e40d07c02 1487-1490
+  s_57312d54dca954::t_d4fe8ccc6e50c9 1617-1626
+  s_57312d54dca954::t_bb514ade47ea6f 946-950
+  s_57312d54dca954::t_58c53c70f4a3aa 428
+  s_57312d54dca954::t_2168e5b163b7e7 57,59,61-62
+  s_57312d54dca954::t_aec02e524aced7 327
+  s_57312d54dca954::t_ce7ffc570c0957 347-348
+  s_57312d54dca954::t_b83562e7f2ec52 104
+  s_57312d54dca954::t_c8e9082762ea1c 1373-1377
+  s_57312d54dca954::t_0f969f67a471bc 262-272
+  s_57312d54dca954::t_68d90e33ffc917 14-17
+  s_57312d54dca954::t_9deac029e7905e 373
+  s_57312d54dca954::t_92c560d57a46de 1927-1929,1932-1942
+  s_57312d54dca954::t_68a94302fc3407 235-237
+  s_57312d54dca954::t_2555a71222b830 1368
+  s_57312d54dca954::t_2f54b4f9ac069e 312
+  s_57312d54dca954::t_dc0676f468b43c 131-134
+pylabrobot/sartorius/ique/driver/fcs.py
+  s_57312d54dca954::t_0db9f114a623ca 812-829
+pylabrobot/sartorius/ique/driver/master_tests.py
+  s_57312d54dca954::t_3e7b24ff0405b0 688-691
+  s_57312d54dca954::t_3236b2895c58f4 13
+  s_57312d54dca954::t_4e33d27ca7a95d 189
+  s_57312d54dca954::t_bb5a05e8569822 232
+  s_57312d54dca954::t_f176f5dab15c66 497-500
+pylabrobot/sartorius/__init__.py
+  s_57312d54dca954::t_b6e61651c2edbd 5
+pylabrobot/sartorius/ique/driver/simulator_tests.py
+  s_57312d54dca954::t_8d7d21924d0fee 148
+  s_57312d54dca954::t_3eebf21262d8fa 177,179-183
+pylabrobot/sartorius/ique/__init__.py
+  s_57312d54dca954::t_b0fb3a65fc1785 1-48
+pylabrobot/sartorius/ique/driver/master.py
+  s_57312d54dca954::t_2bcc850c6f2ec8 577-580
+  s_57312d54dca954::t_9a528bf0bef445 1947-1972
+  s_57312d54dca954::t_ae67a29bd03964 23
+  s_57312d54dca954::t_c31439ffc30d4b 367-370
+pylabrobot/sartorius/ique/device.py
+  s_57312d54dca954::t_7eb1c0fff57ad1 720-721,725
+  s_57312d54dca954::t_2f27188d8f57f7 195
+  s_57312d54dca954::t_3e8d08e8f11d58 1-13,17-19,21-22,24-55,61-67,69-84,86,88-94,98-106,189-194,196-292,295-299,333-334,386-392,410-523,527-549,551-719,722-724,726-735,739-740,742-972,974-1210
+  s_57312d54dca954::t_5cf2ae9545bc27 524-526
+  s_57312d54dca954::t_1411fbdb128ebd 736-738,741
+  s_57312d54dca954::t_888e9393be9413 973
+  s_57312d54dca954::t_f04e20a5557c03 550
+  s_57312d54dca954::t_9bb79a7bd3af6f 1211
+pylabrobot/sartorius/ique/driver/results.py
+  s_57312d54dca954::t_7587f7c665e047 1-350
+pylabrobot/sartorius/ique/driver/errors.py
+  s_57312d54dca954::t_5d0a6c77c45c0f 242-260
+  s_57312d54dca954::t_2ef4045f37eac9 158-159
+pylabrobot/sartorius/ique/driver/features/detector.py
+  s_57312d54dca954::t_554c1c5ef935c2 9-15,24,32,40-45,48
+  s_57312d54dca954::t_12dfc2e23edd5f 237-379
+pylabrobot/sartorius/ique/driver/results_tests.py
+  s_57312d54dca954::t_1c0dea77aa3de3 54-55,59-62
+  s_57312d54dca954::t_ec4c45e290ed78 1-53,56-58,63-114,116-118,120-137
+  s_57312d54dca954::t_d4b02a4f7df77f 115,119
+pylabrobot/sartorius/ique/device_tests.py
+  s_57312d54dca954::t_5def0208b72f44 1-2,4-7,9,11-18,20-25,27-57,71,82-88,123-421
+  s_57312d54dca954::t_e3af0759899b07 422
+pylabrobot/sartorius/ique/driver/worklist.py
+  s_eb3bf329329a42::t_f8d66ff92d072f 442,1790,1893
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "98dd865f32cbdc1c2fa2b6ef2080fdb76a544592",
+  "prompts": {},
+  "sessions": {
+    "s_57312d54dca954": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51df9345-a58b-4a96-a661-fabb91bff2f8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    },
+    "s_eb3bf329329a42": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-af83fc313cf7ceb1d",
+        "model": "unknown"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
