@@ -251,6 +251,30 @@
     "manager": "https://discuss.pylabrobot.org/u/rickwierenga"
   },
   {
+    "id": "bio-rad-cfx-opus",
+    "vendor": "Bio-Rad",
+    "name": "CFX Opus",
+    "models": [
+      {"name": "CFX Opus 96", "status": "wip"},
+      {"name": "CFX Opus 96 Deepwell", "status": "wip"},
+      {"name": "CFX Opus 384", "status": "wip"}
+    ],
+    "kind": "qPCR machine",
+    "capabilities": [
+      "qPCR",
+      "thermocycling",
+      "heating"
+    ],
+    "status": "wip",
+    "needs_hardware_testing": true,
+    "api": "pylabrobot.biorad.CFXOpus",
+    "api_version": "v1",
+    "code_slug": "biorad/cfx_opus/cfx_opus",
+    "doc_slug": "biorad/cfx_opus/hello-world",
+    "oem": "https://www.bio-rad.com/CFXOpus",
+    "notes": "Direct USB control, no Bio-Rad software; command language carried over from the CFX96/C1000 family and pending verification on a real CFX Opus."
+  },
+  {
     "id": "bmg-clariostar",
     "vendor": "BMG Labtech",
     "name": "CLARIOstar (Plus)",

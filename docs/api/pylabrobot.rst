@@ -23,6 +23,7 @@ Manufacturers
 
     pylabrobot.agilent
     pylabrobot.azenta
+    pylabrobot.biorad
     pylabrobot.big_bear
     pylabrobot.bmg_labtech
     pylabrobot.brooks

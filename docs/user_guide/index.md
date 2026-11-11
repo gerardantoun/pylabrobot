@@ -31,6 +31,7 @@ generic/index
 
 agilent/index
 azenta/index
+biorad/index
 big_bear/index
 bmg_labtech/index
 brooks/index
