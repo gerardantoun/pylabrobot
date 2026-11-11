@@ -1,0 +1,48 @@
+{
+ "description": "Recorded between a .NET Framework 4.8 WCF client (DuplexChannelFactory or ChannelFactory with NetTcpBinding, SecurityMode.None) and a .NET Framework 4.8 WCF service hosting the contract slice of sample.py, through a TCP relay on the loopback interface. notes.client_log is what the client printed for each result and callback, notes.service_log what the service printed for each call it received. Scenario: Shaker_Home throws an exception the contract does not declare; the service answers with an InternalServiceFault and ends the session.",
+ "connections": [
+  {
+   "address": "net.tcp://127.0.0.2:19002/Controller",
+   "events": [
+    [
+     "c",
+     "AAEAAQICJG5ldC50Y3A6Ly8xMjcuMC4wLjI6MTkwMDIvQ29udHJvbGxlcgMIDA=="
+    ],
+    [
+     "s",
+     "Cw=="
+    ],
+    [
+     "c",
+     "BsoBigE3aHR0cDovL3RlbXB1cmkub3JnL0lDb250cm9sbGVyL0NvbnRyb2xsZXJfSXMxNTM2Q2FwYWJsZSRuZXQudGNwOi8vMTI3LjAuMC4yOjE5MDAyL0NvbnRyb2xsZXIYQ29udHJvbGxlcl9JczE1MzZDYXBhYmxlE2h0dHA6Ly90ZW1wdXJpLm9yZy9WAgsBcwQLAWEGVghECh4AgqsBRBqtD6hQzF9mNkC6erkx6P225kQsRCqrFAFEDB4AgqsDAVYOQgUKBwEBAQ=="
+    ],
+    [
+     "s",
+     "BtABlAE/aHR0cDovL3RlbXB1cmkub3JnL0lDb250cm9sbGVyL0NvbnRyb2xsZXJfSXMxNTM2Q2FwYWJsZVJlc3BvbnNlIENvbnRyb2xsZXJfSXMxNTM2Q2FwYWJsZVJlc3BvbnNlE2h0dHA6Ly90ZW1wdXJpLm9yZy8eQ29udHJvbGxlcl9JczE1MzZDYXBhYmxlUmVzdWx0VgILAXMECwFhBlYIRAoeAIKrAUQSrQ+oUMxfZjZAunq5Mej9tuZEDB4AgqsUAVYOQgMKBUIHhwEBAQ=="
+    ],
+    [
+     "c",
+     "BnY3Kmh0dHA6Ly90ZW1wdXJpLm9yZy9JQ29udHJvbGxlci9TaGFrZXJfSG9tZQtTaGFrZXJfSG9tZVYCCwFzBAsBYQZWCEQKHgCCqwlEGq3C4eZ0UWX6RIKC1hvyqQK8RCxEKqsUAUQMHgCCqwMBVg5CCwoHAQEB"
+    ],
+    [
+     "s",
+     "BugFAFYCCwFzBAsBYQZWCEQKHgCCmVhodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL25ldC8yMDA1LzEyL3dpbmRvd3Njb21tdW5pY2F0aW9uZm91bmRhdGlvbi9kaXNwYXRjaGVyL2ZhdWx0RBKtwuHmdFFl+kSCgtYb8qkCvEQMHgCCqxQBVg5WhgFWjgFWmgGYAXOYATqZCFJlY2VpdmVyVpwBVpoBCQFhUmh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vbmV0LzIwMDUvMTIvd2luZG93c2NvbW11bmljYXRpb25mb3VuZGF0aW9uL2Rpc3BhdGNoZXKYAWGYATqZFEludGVybmFsU2VydmljZUZhdWx0AQFWkAFWkgEFA3htbARsYW5nmAVlbi1DSJqtAVRoZSBzZXJ2ZXIgd2FzIHVuYWJsZSB0byBwcm9jZXNzIHRoZSByZXF1ZXN0IGR1ZSB0byBhbiBpbnRlcm5hbCBlcnJvci4gIEZvciBtb3JlIGluZm9ybWF0aW9uIGFib3V0IHRoZSBlcnJvciwgZWl0aGVyIHR1cm4gb24gSW5jbHVkZUV4Y2VwdGlvbkRldGFpbEluRmF1bHRzIChlaXRoZXIgZnJvbSBTZXJ2aWNlQmVoYXZpb3JBdHRyaWJ1dGUgb3IgZnJvbSB0aGUgPHNlcnZpY2VEZWJ1Zz4gY29uZmlndXJhdGlvbiBiZWhhdmlvcikgb24gdGhlIHNlcnZlciBpbiBvcmRlciB0byBzZW5kIHRoZSBleGNlcHRpb24gaW5mb3JtYXRpb24gYmFjayB0byB0aGUgY2xpZW50LCBvciB0dXJuIG9uIHRyYWNpbmcgYXMgcGVyIHRoZSBNaWNyb3NvZnQgLk5FVCBGcmFtZXdvcmsgU0RLIGRvY3VtZW50YXRpb24gYW5kIGluc3BlY3QgdGhlIHNlcnZlciB0cmFjZSBsb2dzLgEBAQEBBw=="
+    ],
+    [
+     "c",
+     "Bw=="
+    ]
+   ]
+  }
+ ],
+ "notes": {
+  "client_log": [
+   "result: Controller_Is1536Capable -> true",
+   "result: Shaker_Home fault -> \"Receiver|InternalServiceFault|The server was unable to process the request due to an internal error.  For more information about the error, either turn on IncludeExceptionDetailInFaults (either from ServiceBehaviorAttribute or from the <serviceDebug> configuration behavior) on the server in order to send the exception information back to the client, or turn on tracing as per the Microsoft .NET Framework SDK documentation and inspect the server trace logs.|http://schemas.microsoft.com/net/2005/12/windowscommunicationfoundation/dispatcher/fault\"",
+   "result: state -> \"Faulted\"",
+   "result: after fault -> \"ProtocolException\"",
+   "done"
+  ],
+  "service_log": []
+ }
+}
