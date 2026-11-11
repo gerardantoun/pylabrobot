@@ -1,0 +1,57 @@
+pylabrobot/biorad/cfx_opus/status.py
+  s_b859755b3208c3::t_a36bc4aaf5ed99 23-25
+  s_b859755b3208c3::t_0c6f767f1b3ac3 108
+  s_b859755b3208c3::t_efaabafacc76cb 1-22,26-107,109-214
+pylabrobot/biorad/cfx_opus/plate_read.py
+  s_b859755b3208c3::t_1ecac693a4da41 1-208
+  s_b859755b3208c3::t_2350b64f327c1f 209-210
+pylabrobot/biorad/cfx_opus/cfx_opus_tests.py
+  s_b859755b3208c3::t_9548e3ad73b2e0 1-181
+  s_b859755b3208c3::t_41c5cd999358a3 182-184
+  s_b859755b3208c3::t_9da92a92c41f04 185-187
+pylabrobot/biorad/cfx_opus/protocol.py
+  s_b859755b3208c3::t_6c2c9cadba0276 1-13,16-339
+  s_b859755b3208c3::t_96d0d340556ccc 14-15
+pylabrobot/biorad/cfx_opus/protocol_tests.py
+  s_b859755b3208c3::t_cf563e4fb26402 1-138
+  s_b859755b3208c3::t_0cbf4c865027c0 139-141
+  s_b859755b3208c3::t_aad3e102beced2 142-146
+pylabrobot/biorad/cfx_opus/plate_read_tests.py
+  s_b859755b3208c3::t_e73abe30155728 1-117
+pylabrobot/biorad/cfx_opus/status_tests.py
+  s_b859755b3208c3::t_5e228d8c1d23e7 1-61,63-111
+  s_b859755b3208c3::t_6ecca54dd0e756 62
+pylabrobot/biorad/cfx_opus/__init__.py
+  s_b859755b3208c3::t_005da27748ef45 1-23
+pylabrobot/biorad/cfx_opus/cfx_opus.py
+  s_b859755b3208c3::t_4675cd58207892 1-22,24-131,134-142,144-150,153-155,160-241,248-249,251-252,254-267,269,271-279,281,290-450
+  s_b859755b3208c3::t_790dc1eccdfb67 242-247,250,253
+  s_b859755b3208c3::t_a5ca0d16993a1f 151,158
+  s_b859755b3208c3::t_304c07f31fcfec 23
+  s_b859755b3208c3::t_6f8526ec588588 132-133,143,152,156-157,159
+  s_b859755b3208c3::t_9e98e28d4b172b 268,270
+  s_b859755b3208c3::t_5e26de46062afe 280,282-289
+pylabrobot/biorad/cfx_opus/framing.py
+  s_b859755b3208c3::t_0cc417369ef350 1-158
+  s_b859755b3208c3::t_b921eff21fb7b5 159-160
+pylabrobot/biorad/cfx_opus/framing_tests.py
+  s_b859755b3208c3::t_8bbc298b9034ec 1-86
+pylabrobot/biorad/__init__.py
+  s_b859755b3208c3::t_10817470e61af4 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33873f56e9c5263c885d4176f4d4516478e36d11",
+  "prompts": {},
+  "sessions": {
+    "s_b859755b3208c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b33bbfd-8013-4579-bf74-a99e43fa1a36",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
