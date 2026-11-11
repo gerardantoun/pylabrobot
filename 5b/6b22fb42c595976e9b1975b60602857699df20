@@ -1,0 +1,50 @@
+pylabrobot/sartorius/ique/driver/worklist_tests.py
+  s_57312d54dca954::t_e62ec17e76b242 1-747,750-815,817-921,923-1002,1005-1268,1272-1395,1403-1437,1440-1447,1449-1556
+  s_57312d54dca954::t_d13a0246f9b71e 1396-1402
+  s_57312d54dca954::t_da31619a2743af 1438-1439
+  s_57312d54dca954::t_4cc2c1d45dd92f 748-749
+  s_57312d54dca954::t_9f4ab7058acd75 1003-1004
+  s_57312d54dca954::t_cab5a8415d9068 1269-1271
+  s_57312d54dca954::t_d45ec37e5029c3 1448
+  s_57312d54dca954::t_c946eab5ed2bcc 816
+  s_57312d54dca954::t_8e6462a2cd4034 922
+pylabrobot/sartorius/ique/driver/worklist.py
+  s_57312d54dca954::t_a17a8cb2cfa4bf 1518-1519,1522-1523,1526-1536
+  s_57312d54dca954::t_e60975bf6eef57 1280-1281,1290-1294
+  s_57312d54dca954::t_dd369f94fb450d 2257-2268
+  s_57312d54dca954::t_8212c672457757 2319-2321,2324-2326,2328-2329
+  s_57312d54dca954::t_efd6f716c4273f 1-533,535-681,685-1279,1282-1289,1295-1517,1520-1521,1524-1525,1537-1597,1599-1604,1607,1609-1655,1657-1658,1662-1761,1763-1867,1869-2256,2269-2318,2322-2323,2327,2330-2374
+  s_57312d54dca954::t_24236497d1e98d 682-684
+  s_57312d54dca954::t_618474625ccc2f 1656,1659-1661
+  s_57312d54dca954::t_c3ae178057efb3 1605-1606,1608
+  s_57312d54dca954::t_162eb393d3f96e 1762
+  s_57312d54dca954::t_6d26f5c0e78176 534
+  s_57312d54dca954::t_1faa599d7fa3a2 1598
+  s_57312d54dca954::t_34aa00ebe1c737 1868
+  s_57312d54dca954::t_a9bf17df3bf5fe 2375-2377
+  s_51a7909a9c56aa::t_6c58976e794134 2378-2395
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5b6b22fb42c595976e9b1975b60602857699df20",
+  "prompts": {},
+  "sessions": {
+    "s_51a7909a9c56aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a9b025998653ab887",
+        "model": "unknown"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    },
+    "s_57312d54dca954": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51df9345-a58b-4a96-a661-fabb91bff2f8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
