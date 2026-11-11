@@ -1,0 +1,36 @@
+pylabrobot/cli_registry.py
+  s_b859755b3208c3::t_cc51f50d4e5140 30-32
+docs/user_guide/index.md
+  s_b859755b3208c3::t_d23d07e15be232 34
+docs/user_guide/biorad/index.md
+  s_b859755b3208c3::t_ce2d2bbf4d27b3 1-7
+docs/api/pylabrobot.rst
+  s_b859755b3208c3::t_cfeb3d2cf579dd 26
+docs/api/pylabrobot.biorad.rst
+  s_b859755b3208c3::t_c8e365ae5c6732 1-82
+pylabrobot/biorad/cfx_opus/cli.py
+  s_b859755b3208c3::t_8d219cedee89b2 1-119
+pylabrobot/biorad/cfx_opus/cli_tests.py
+  s_b859755b3208c3::t_e0fd7c71a1a571 1-46
+  s_b859755b3208c3::t_dcae2cccca6f53 47-49
+docs/_static/devices.json
+  s_b859755b3208c3::t_b054c58a311ff0 253-285,326-333,433-456,572-579,802-816,855-869,920-4024,4234-4273,4405-4416,4451-4474
+docs/user_guide/biorad/cfx_opus/hello-world.ipynb
+  s_b859755b3208c3::t_9cf2839894d1d7 1-300
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e762ff9ad875aae06ca2d9612c35adc62ce0b37",
+  "prompts": {},
+  "sessions": {
+    "s_b859755b3208c3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7b33bbfd-8013-4579-bf74-a99e43fa1a36",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
