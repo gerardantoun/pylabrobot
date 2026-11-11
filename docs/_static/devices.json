@@ -1908,6 +1908,23 @@
     "oem": "https://www.sartorius.com/en/products/weighing/laboratory-balances/entris-ii"
   },
   {
+    "id": "sartorius-ique-screener-plus",
+    "needs_hardware_testing": true,
+    "vendor": "Sartorius",
+    "name": "iQue Screener PLUS",
+    "kind": "flow cytometer",
+    "capabilities": [
+      "flow cytometry",
+      "shaking"
+    ],
+    "status": "wip",
+    "api": "pylabrobot.sartorius.IQue",
+    "api_version": "v1",
+    "code_slug": "sartorius/ique",
+    "doc_slug": "sartorius/ique/hello-world",
+    "notes": "Also sold as the IntelliCyt iQue Screener PLUS."
+  },
+  {
     "id": "tecan-evo",
     "vendor": "Tecan",
     "name": "EVO",
