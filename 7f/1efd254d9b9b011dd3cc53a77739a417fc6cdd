@@ -1,0 +1,97 @@
+pylabrobot/sartorius/ique/driver/features/sampler.py
+  s_57312d54dca954::t_57d10e99019295 1-412
+  s_57312d54dca954::t_f3965117adf5dc 413-414
+pylabrobot/sartorius/ique/driver/features/__init__.py
+  s_57312d54dca954::t_f83d97cdaee0b8 1
+pylabrobot/sartorius/ique/driver/errors_tests.py
+  s_57312d54dca954::t_53d73034d40620 1-61
+pylabrobot/sartorius/ique/driver/errors.py
+  s_57312d54dca954::t_1c4eeeda081b72 1-246
+pylabrobot/sartorius/ique/driver/master_tests.py
+  s_57312d54dca954::t_de49861b20f788 1-1450
+  s_57312d54dca954::t_d4563bed25e60a 1451-1453
+  s_da2fe3180fc5e7::t_21c67363b90594 1454-1461
+pylabrobot/sartorius/ique/driver/features/shaker_tests.py
+  s_57312d54dca954::t_3fad906bce5256 1-100
+pylabrobot/sartorius/ique/driver/features/shaker.py
+  s_57312d54dca954::t_4e46dd00aeea99 1-141
+pylabrobot/sartorius/ique/driver/features/pump_tests.py
+  s_57312d54dca954::t_84a6e0e49468ac 1-100
+pylabrobot/sartorius/ique/driver/features/sampler_tests.py
+  s_57312d54dca954::t_e8fd3ca12f12da 1-201
+  s_57312d54dca954::t_da7e0cc72d86c4 202-204
+  s_da2fe3180fc5e7::t_4a6459c0145b4d 205-207
+pylabrobot/sartorius/ique/driver/features/pump.py
+  s_57312d54dca954::t_b4e391067be7ae 1-114
+pylabrobot/sartorius/ique/driver/features/plate_rail.py
+  s_57312d54dca954::t_b35adefdd7f584 1-92
+pylabrobot/sartorius/ique/driver/features/detector_tests.py
+  s_57312d54dca954::t_e29459a8b08db5 1-162
+pylabrobot/sartorius/ique/device_tests.py
+  s_57312d54dca954::t_b76c376357221a 1-68
+pylabrobot/sartorius/ique/driver/features/plate_rail_tests.py
+  s_57312d54dca954::t_eaecc90e942cbc 1-99
+pylabrobot/sartorius/ique/device.py
+  s_57312d54dca954::t_ebfe538832a127 1-254
+pylabrobot/sartorius/ique/driver/features/detector.py
+  s_57312d54dca954::t_3d519b59e20eb8 1-320
+  s_57312d54dca954::t_5b13e424644023 321
+pylabrobot/sartorius/ique/driver/simulator_tests.py
+  s_57312d54dca954::t_bc9aea5560fa0f 1-19,21-242,244-277,279-290,292-350,352-397,399-402,404,406-424
+  s_57312d54dca954::t_ca6699912cc7e4 243
+  s_57312d54dca954::t_f0a09adef4b3d9 398,403,405
+  s_57312d54dca954::t_4a94f557ae5da8 20
+  s_57312d54dca954::t_04476f72522f9c 351
+  s_57312d54dca954::t_f2b7df82e16fe4 278
+  s_57312d54dca954::t_1f9702605ee37e 291
+  s_57312d54dca954::t_1f0bdb28069e50 425-427
+  s_da2fe3180fc5e7::t_3230452e487b5b 428
+pylabrobot/sartorius/ique/driver/master.py
+  s_57312d54dca954::t_c90974d28897f8 2030-2031
+  s_57312d54dca954::t_ac7cf3f7bef429 1299-1311
+  s_57312d54dca954::t_1c5e92f5fc7f11 1379,1815-1816
+  s_57312d54dca954::t_6aef863154b8aa 1296-1298
+  s_57312d54dca954::t_c6858c98b7b4d0 1312-1314,1376-1378
+  s_57312d54dca954::t_b4aec9dd27e12f 1380-1382,1812-1814
+  s_57312d54dca954::t_ac10267d43304b 1817-1819,2027-2029
+  s_57312d54dca954::t_3ca1606db1401f 2032-2034
+  s_da2fe3180fc5e7::t_ed0a4aa6f2472f 1-1295,1315-1375,1383-1811,1820-2026,2035-2124
+pylabrobot/sartorius/ique/driver/simulator.py
+  s_57312d54dca954::t_6d039af82e642a 1593
+  s_57312d54dca954::t_6b6b0b0a7e3e6e 1-354,356-383,385-570,583-1403,1405-1481,1483,1486-1557,1560-1592,1594-1697,1701-1737,1739-1745,1749-1888,1890-1991
+  s_57312d54dca954::t_f0aa9bd538205a 1482,1484-1485
+  s_57312d54dca954::t_a8bd15bfe54087 1558
+  s_57312d54dca954::t_188e1aef8d2e4e 1698-1700
+  s_57312d54dca954::t_31426897542867 1738,1746-1748
+  s_57312d54dca954::t_70a180a8e35d21 355
+  s_57312d54dca954::t_4ca2d7683fbbfc 384
+  s_57312d54dca954::t_b082745fc46e03 1404
+  s_57312d54dca954::t_49096cc82a739d 1559
+  s_57312d54dca954::t_34818d59846535 571-582
+  s_57312d54dca954::t_5b96a2f777fc59 1889
+  s_57312d54dca954::t_bd1ba4f9ecd7bc 1992
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f1efd254d9b9b011dd3cc53a77739a417fc6cdd",
+  "prompts": {},
+  "sessions": {
+    "s_57312d54dca954": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51df9345-a58b-4a96-a661-fabb91bff2f8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    },
+    "s_da2fe3180fc5e7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aa4eafede58529df4",
+        "model": "unknown"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
