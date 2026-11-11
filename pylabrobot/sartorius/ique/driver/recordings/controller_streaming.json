@@ -1,0 +1,391 @@
+{
+ "description": "Recorded through a TCP relay between a .NET Framework 4.8 WCF client (DuplexChannelFactory or ChannelFactory, NetTcpBinding with SecurityMode.None) and .NET Framework 4.8 WCF services that declare the full contract of the controller and the watchdog. calls lists every call in order: the arguments the service received and the values it answered, as canonical text, the callbacks it sent before answering, and the bytes of uploaded and downloaded streams (length and the start of their SHA-256; uploads are recordings.pattern(length, seed)). Every IControllerStreaming operation with each of its cases and a declared fault, one connection per call.",
+ "connections": [
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c219 s5224",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1muMYUzcjMUs3IyJbGEcLlxyDE0zHTJKSkBmlKTmFpQWZerlF6Xre2IxAMnQePfUEp/8dMei5IzMslQXqbWfj54oy1qY5bmL0am5UsJrpYuOi9ZqEUYXHpAFpLmTMYzPQQKXVRzCWBzLyMjIwM56nhnTax6Uei0otbggP6841UUIw4sgdyoQ0ofVvQ5yeLSV5pTM+8+oYB9XO2f3rZ8S5mGlUzZf+iig75fbs/rUSw51t9SWxYceMsjbxdbM3nXzh7hZaMnkTRc/8Ov55nSvOvmCXc01pXnRwQf/5WxjqmftvPFdzDSkeNLGC+/5dH2yu1aeeM6m6pLctPDA/X+yNtFVM3dc/yZqElw0ccP5d7w63lmdK44/Y1VxTmpcsP/eXxnrqMoZ2699FTEOKpyw/txbHm2vzI7lx56yKDslNszfd/ePtFVkxfRtV78IGwUW9K87+4ZbyzOjfdnRJ8xKjgn18/be+S1lGVE+beuVz0KGAfl9a8+85tL0SG9beuQxk6JDfN3cPbd/SVqEl03dcvmToIF/Xu+a0684NdzTWpccXvCf/xGH+h/5keDXRzjjeoR4E2eSHiHexBnNI8SbOKN5hHgTZzSPEG/ijOYR4k2c0TxCvIkzmkeIN3FG8wjxJs5oHkktXmzRPKIau1iieUQ1drFE84hq7GKJ5hHV2MUSzSOqsYsRzWwLOpiMgypaWUdSkxdLZI+oJi+WaB4c3mSfz3TgPnicEQDFcGN5"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c219 s577",
+   "data": "eNqlks9rE0EUx/OapImmVFCh0oPsSVDM7jYtBEMrK1l/LLR4SFgED2WYfd0MzM4uM7NJcyseevBQil6yRfwHpP4B+n94V/Dqwb/AbIw12OZQZE7DvPf5fr/vTQEKAAt1gdrUNGlZ1lqjadrj02g1Htj2utWOhZYx5yg7WiKJmAiLlaVa+Qv4CzVQpRqQRb/qXr1deJU5Pa1zhsYoSSUzYxla3gWAGejuU9TbcfhI0h7ro7t6+vr7y4/d9z+8k68/T9PPOnbvu/c+3AR3KRe4nE/wl51b86SqNy4wCwCFSvlT8Xy03f+NNlOLss8oPt6nmGgWiyck5dq9fi752L5/CP4R+CcwAjWCVrbYQRGgBP8Y/DdQLu5HvMSJCEdlFPX2s8ycp27sEcYxMDabGw+NO4bScZJgAP4InNX5zqpb09SK9jAiygyIJjQvJ1RPRtCw7Q3Lblqe0Mg5aw/1jIUrwO5OAYPBwBys/2lZs17sbHcmzDoTShNB0Vn2hEB5pv3v3SwKxg/BqeygUiTE7BrL3w1KUoXGt3dvnVJ3mOABZCudoRqvyeyyCONUnxFmei85p9/ozJiCPdEnnAXPE5QkB/9VgMkH+gWs6SdM"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c236 s184",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1ueMYUzcjMUs3IyJbGEcLlxyDE0zXTJKSkBmlKTmFpQWZerlF6Xre2IxAMnQ+NCCnPzEFLfkYpfU3Hy3zJxUF6m1LFYnjlzn6PLoEP3ktr0zYKaLjovWahFGFx6QJaS5lTGMz0EGn3Ucwlgc7cBWnF9alJzKCAQM7KybsfjVhxp+DUotLsjPK051EcLwM8jhKsToxeoBsLsBP86dyA=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c541 s184",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1pfMYUzcjMUs3IyJbGEcLlxyDE0zXTJKSkBmlKTmFpQWZerlF6Xre2IxAMnQ+NCCnPzEFLfkYpfU3Hy3zJxUF6m1fHOmh8368MRrye61savOWNxy0XHRWi3C6MIDsoQ0tzKG8TnI4LOOQxiLox3YivNLi5JT5/1nVnJMqJ+3985vKcuI8mlbr3wWMgzI71t75jWXpkd629Ijj5kUHeLr5u65/UvSIrxs6pbLnwQN/PN615x+xanhnta65PAjRgX7uNo5u2/9lDAPK52y+dJHAX2/3J7Vp15yqLultiw+9JBB3i62Zvaumz/EzUJLJm+6+IFfzzene9XJF+xqrinNiw4++C9nG1M9a+eN72KmIcWTNl54z6frk9218sRzNlWX5KaFB+7/k7WJrpq54/o3UZPgookbzr/j1fHO6lxx/BmrinNS44L99/7KWEdVzth+7auIcVDhhPXn3vJoe2V2LD/2lEXZKbFh/r67f6StIiumb7v6RdgosKB/3dk33FqeGe3Ljs7TfcKlqUe8TxmBgIGddTMjZuLwoUbiCEotLsjPK051EcJIJKCYViFGL9YYB7sbACDYN8U="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c339 s514",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1nNMYUzcjMUs3IyJbGEcLlxyDE0zXTJKSkBmlKTmFpQWZerlF6Xre2IxAMnQ+NCCnPzEFLfkYpfU3Hy3zJxUF6m1q9YrzRdPSXHa5Lsj4wT3p/0uOi5aq0UYXXhAlpDmVsYwPgcZfNZxCGNxtANbcX5pUXLqvGQ+XZ/srpUnnrOpuiQ3LTxw/5+sTXTVzB3Xv4maBBdN3HD+Ha+Od1bniuPPWFWckxoX7L/3V8Y6qnLG9mtfRYyDCiesP/eWR9srs2P5sacsyk6JDfP33f0jbRVZMX3b1S/CRoEF/evOvpnPyM3IyMjAzjqbGTNIk6kRpEjqU4vKMpNTXSuSUwtKMvPz3BJLc0pchDBCHBhsYW2MYX2MYbMYZzAWz2C0mskWnJqXklrEGDaBMWwSIytzRW4OS05iXvoM1tQ8XWePmUb4XKCQlggkUxRszE3tFNQUikvyCwpSUxjDZjA6SOF2HYct1PfFyRmpuYnFeimJJYnJIOWJySXgoDAyMDDRNzDX98wrSc3JyXSuLNFDGMfJmKkJNaC8vFyv3BimxVA/wtcnGGymbmZecUliXnKqA59nXl5qEdxuPea8zJw2Rgd239Ti4sT01ERyPOjAElJZkDpTIbiyGBiBep55ZYk5mSn+BalFiSA74JYxMoJTAADZBEUV"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c5295 s119",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1n6mMCZuxmIWbsZEtjAOFy45hqaZDhklJSAzSlJzC0qLMvXyi9L1PbEYoO9cWZKfm1qSWhQfWpCTn5jillmUW55YlJrK4ZaZk+qXmJvKyZghjMW0mQLBpbm5iUWVCiWpFSUKj+ZMdpFau/ikkWbOWx7vCZF71pRPzTvjouOitVqE0YUH5CbSvMYYxucgDHcdyDEQB3Jgc4wDF0gBRO+8/61MLMpOiQ3z9939I20VWTF929UvwkaBBf3rzr7h1vLMaF929AmzkmNC/by9d35LWUaUT9t65bOQYUB+39ozr7k0PdLblh55zKToEF83d8/tX5IW4WVTt1z+JGjgn9e75vQrTg33tNYlhx8xKtjH1c7ZfeunhHlY6ZTNlz4K6Pvl9qw+9ZJD3S21ZfGhhwzydrE1s3fd/CFuFloyedPFD/x6vjndq06+YFdzTWledPDBfznbmOpZO298FzMNKZ608cJ7Pl2f7K6VJ56zqbokNy08cP+frE101cwd17+JmgQXTdxw/h2vjndW54rjz1hVnJMaF+y/91fGOqpyxvZrX0WMgwonrD/3lkfbK7Nj+bEF//mfcmv9kR8Jfn2KM65HiDdxJukR4k2c0TxCvIkzmkeIN3FG8wjxJs5oHiHexBnNI8SbOKN5hHgTZzSPEG/ijOaR1OLFFs0jqrGLJZpHVGMXSzSPqMYulmgeUY1dLNE8ohq7GNHMtqCDySy0upV1JDV5sUT2iGryYonmweFN9vlMQJ8yMjKwsxZjjlZ6UDpaGZRaXJCfV5zqIoQxBMkYxgeyFgAuEVlA"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c325 s119",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1gNMYUzcjMUs3IyJbGEcLlxyDE0zHTJKSkBmlKTmFpQWZerlF6Xre2IxQN+5siQ/N7UktSg+tCAnPzHFLbMotzyxKDWVwy0zJ9UvMTdVjzkvM6eNkzFDGIuZnIyZmlDh8vJyvXJjsKiRgYGhfoSvT3ByRmpuom5mXnFJYl5yKqOL1NoP6VHb/pbGeWzgMumY0OfH6aLjorVahNGFB+Rq0jzPGMbnIAx3P8i5EC9wYHOoAxdIAUTvPE5WFeekxgX77/2dzyjDyMjIwM5ajBmGHpSGYVBqcUF+XnGqixCGt4FuB1kLAMIqpB4="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c392 s577",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1mbmMCZuxmIWbsZEtjAOFy45hqaZDhklJSAzSlJzC0qLMvXyi9L1PbEYoO9cWZKfm1qSWhQfWpCTn5jillmUW55YlJrK4ZaZk+qXmJvKyZghjMW0mdKH5+QdXp98eEfK4ZUKj+ZMVng2femzOWsUPsxfvspFau3NdfZCSuFmrnNPnmE8G3TBwUXHRWu1CKMLD8h5pPmSMYzPQRjuUJC7IG7lwOYuBy6QAojeecl8uj7ZXStPPGdTdUluWnjg/j9Zm+iqmTuufxM1CS6auOH8O14d76zOFcefsao4JzUu2H/vr4x1VOWM7de+ihgHFU5Yf+4tj7ZXZsfyY09ZlJ0SG+bvu/tH2iqyYvq2q1+EjQIL+tedfTOfkZuRkZGBnXUXlniIpzQekNSmFpVlJqe6ViSnFpRk5ue5JZbmlLgIYQQ0MLTC2hjD+hjDZjHOYCyewWg1ky04NS8ltYgxbAJj2CRGVuaK3ByWnMS89BmsqXm6zh4z9XDZrpCWCAzMFAUbczM7BTWF4pL8goLUFMawGYwOUrhdxmEL9XVxckZqbmKxXkpiSWIySHlicgk4CIwMDEz0Dcz1PfNKUnNyMoHW6yGM42TM1IQaUF5erlduDNNiqB/h6xMMNlM3M6+4JDEvOdWBzzMvL7UIbjc6X485LzOnjdGB3Te1uDgxPXUmfyZIXiE5sbQ4FZRsHVhCKgtSGxhnigdXFgOjSS8kMzc1v7QEbgKSXhLDCWL0TAWowZ55ZYk5mSn+BalFiSCDETYwghMQAKf+dJ0="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c247 s556",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1k+MYUzcjMUs3IyJbGEcLlxyDE0z/TJKSkBmlKTmFpQWZerlF6Xre2IxAMnQeJf88ryc/MQU58SczKSixJLM/Lzg1JISoKpiF6m1nd2HBX1+T3dYyK/bZXj3ca+LjovWahFGFx6QdaS5mjGMz0GNOIs5hLF4hJGRkYGd9QczprfDqOvtoNTigvy84lQXIQzvg/ygR5opWP3ioEO0IaU5JfP+s6m6JDctPHD/n6xNdNXMHde/iZoEF03ccP4dr453VueK489YVZyTGhfsv/dXxjqqcsb2a19FjIMKJ6w/95ZH2yuzY/mxpyzKTokN8/fd/SNtFVkxfdvVL8JGgQX9686+4dbyzGhfdvQJs5JjQv28vXd+S1lGlE/beuWzkGFAft/aM6+5ND3S25Yeecyk6BBfN3fP7V+SFuFlU7dc/iRo4J/Xu+b0K04N97TWJYcfMSrYx9XO2X3rp4R5WOmUzZc+Cuj75fasPvWSQ90ttWXxoYcM8naxNbN33fwhbhZaMnnTxQ/8er453atOvmBXc01pXnTwwX8525jqWTtvfBczDSmetPHCez5dn+yulSfm6T7n1dEj3qeM4LQCAOthV0k="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c247 s251",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1k+MYUzcjMUs3IyJbGEcLlxyDE0z/TJKSkBmlKTmFpQWZerlF6Xre2IxAMnQeJf88ryc/MQU58SczKSixJLM/Lzg1JISoKpiF6m1q84rbV75VNdxxoz8t7fi/H1ddFy0VoswuvCArCPN1YxhfA5qxFnMIYzFI4yMjAzsrN+weDuMut4OSi0uyM8rTnURwvA+yA96pJmC1S8OOkQbUppTwgj2OgDfycHU"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c247 s544",
+   "data": "eNqtUk9PE0EU76MtLZZwEE4czJ4wGLu7FJKGBsiaXY1NQA9rJt7MsPssE2ZnNzMPll49cIMYTq1fwRjj1QPfh5vhTuK2IpKACUYy19//NyUoAUw0FZJNUdZxnKVW23aL1+q0Vl132fFTRTqVEnVIGnkiVK9cm25Uz4FNNMBUGsAnWT148Kj0Yfhqh2ikQZhke1rYqe453VsErom+C9JcyZTHPpdiW3MSqQqRqECZYP5LcjZ1crH62P92+uzsx/n3o+Bp8OTzHATTI7t/Sw1sxlu4m3F99pYiAFCqVb+Wb9ZO7rf2NSbqfRHh84MIsxHiBd+TFDy8sUpRjR0COwb2CQZgBtAZToaoYtTAPgI7gWr5IJEVyVVvUEXV9F8O1+6WxXrPhcTYWmu3N6wFy1CaZRgDG4A3//ec9fXLRUy0gwk3dsyJRyM4j2g8T8t1Vxy37XQVoZTC75P9R24KxOKlQJ7ndr78m7LkvN3aDMeaTaEMcRWhN9NVCvWVt11WQh6CV9tCY3gPd/+vqld5089waIV9U5zX7qr9ghm/zvAX+coWYPw/fgLr4ygz"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c4762 s200",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1l/MYUzcjMUs3IyJbGEcLlxyDE0zfTJKSkBmlKTmFpQWZerlF6Xre2IxAMnQ+NCCnPzEFOfEnMykosSSzPy84NSSEqCaYheptcY/Dz5fVXbObecK48W/7PV0XHRctFaLMLrwgCwjzc2MYXwOKsRYyyGMxRMObMX5pUXJqfP+c6i7pbYsPvSQQd4utmb2rps/xM1CSyZvuviBX883p3vVyRfsaq4pzYsOPvgvZxtTPWvnje9ipiHFkzZeeM+n65PdtfLEczZVl+SmhQfu/5O1ia6aueP6N1GT4KKJG86/49XxzupccfwZq4pzUuOC/ff+ylhHVc7Yfu2riHFQ4YT1597yaHtldiw/9pRF2SmxYf6+u3+krSIrpm+7+kXYKLCgf93ZN9xanhnty44+YVZyTKift/fObynLiPJpW698FjIMyO9be+Y1l6ZHetvSI4+ZFB3i6+buuf1L0iK8bOqWy58EDfzzetecfsWp4Z7WuuTwI0YF+7jaObtv/ZQwDyudsvnSRwF9v9ye1acW/Od/ya/3R34k+PUlzrgeId7EmaRHiDdxRvMI8SbOaB4h3sQZzSPEmzijeYR4E2c0jxBv4ozmEeJNnNE8QryJM5pHUosXWzSPqMYulmgeUY1dLNE8ohq7WKJ5RDV2sUTziGrsYkTzbMb506wiB6NXGRkZGdhZDzNijkyFUHNkKii1uCA/rzjVRQhjhAo0zKRDihlYh5vA/gAACmN3Cg=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c355 s613",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1ntMYUzcjMUs3IyJbGEcLlxyDE0zfTJKSkBmlKTmFpQWZerlF6Xre2IxAMnQ+NCCnPzEFOfEnMykosSSzPy84NSSEqCaYheptYFOB9yO7z7k1yqyN2b+1hQVFx0XrdUijC48IMtIczNjGJ+DCjHWcghj8YQDW3F+aVFy6rxkPl2f7K6VJ56zqbokNy08cP+frE101cwd17+JmgQXTdxw/h2vjndW54rjz1hVnJMaF+y/91fGOqpyxvZrX0WMgwonrD/3lkfbK7Nj+bGnLMpOiQ3z9939I20VWTF929UvwkaBBf3rzr6Zz8jNyMjIwM56iRkziLOpGcRI+lKLyjKTU10rklMLQCrcEktzSlyEMGIAGIxhbYxhfYxhsxhnMBbPYLSayRacmpeSWsQYNoExbBIjK3NFbg5LTmJe+gzW1DxdZ4+ZVsS4RCEtMTMnNUXBxtzCTkFNobgkv6AgNYUxbAajgxRuV3LYQkOjODkjNTexWC8lsSQxGaQ8MbkEHDRGBgYm+gbm+p55Jak5OZnOlSV6COM4GTM1oQaUl5frlRvDtBjqR/j6BIPN1M3MKy5JzEtOdeDzzMtLLYLbjc7XY87LzGljdGD3TS0uTkxPncmfCZJXSE4sLU5VeDRnsgNLSGVBag/jTPHgymJg9OmFZOam5peWwE1A0ktBmEGsmakAtcQzrwyoM8W/IBWiGWEbIziRAQAWtXNv"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c272 s198",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1m6mMCZuxmIWbsZEtjAOFy45hqaZ3hklJSAzSlJzC0qLMvXyi9L1PbEYgGRovHNOamKRc2JOZlJRYklmfl5wakkJUEmxi9Ra/222heYsDA79mctuvRX+Eeai46K1WoTRhQdkF2lOZgzjc1AmwlYOYSxecOBOBikPSk0szs+bKRBcmpubWFSpUJJaUaLwaM5kRkZGBnbWg4yY4RFMxfAISi0uyM8rTnURwggXkOe0STACqyfBvgAAKpOyhA=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c306 s198",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1rVMYUzcjMUs3IyJbGEcLlxyDE0zvTNKSkBmlKTmFpQWZerlF6Xre2IxAMnQeOec1MQi58SczKSixJLM/Lzg1JISoJJiF6m1C24L1kuvnuvUutZs28bkQgcXHRet1SKMLjwgu0hzMmMYn4MyEbZyCGPxggN3Mkh5UGpicX6eOnNeZk4bJ2OSJlRleXm5XrkxWKGRgYGhfoSvT3ByRmpuom5mXnFJYl5yKiMQMLCzHmTEDLFgKoZYUGpxQX5ecaqLEEbIgbyvTYIRWIMB7AsAW4S8sA=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c255 s198",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1l+MYUzcjMUs3IyJbGEcLlxyDE0zvTNKSkBmlKTmFpQWZerlF6Xre2IxAMnQeOec1MQi58SczKSixJLM/Lzg1JISoJJiF6m1+y8rlnBbz/aZs3qJ4Y9X3ztcdFy0VoswuvCA7CLNyYxhfA7KRNjKIYzFCw7cySDlQamJxfl5jEDAwM56EIv3g6no/aDU4oL8vOJUFyGMYAD5RZsEI7D6CewLAAarrwA="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c271 s535",
+   "data": "eNqtUk1rE0EYzpuPJnZLBdtTD2WpYFHM7jYthIRaFnYVgymCK4MIItPd12TKZHadmTbNtYciHqS0B7P9ByLe/Sn+EEHw5G6stdAKFWWuz/c7BSgAFOsCtaXDpG3bK42m5WSv0W60HGfV9mKhZcw5ykBLpAMmeqXqjFF5WyRFA1TZADpFav70YmE/fdTXOtfQOEh2JLNi2bM7lwicE33pcaTSo5xtSapZLALUOoMof+HT/Nrzwxfd993jr9++f/n8xvDv+nc+zoM/k3v9XWQgs+7NK7jW5i6p4BphDn+CVMUivb5OzVvm1oa59HrJXKbLAFCoVj6ULs6x/R/nOEdDuctCvL8XYpIjHtAdrv0bF9bKKpMDIO+AnMAY1Bja6VSAIkIJ5BDIEVRKewNe5lT0xhUUde9h2rpCEPMVZRwjc73Z2sh2UDpOEoyAjMFd+HPI2r3TLVTYxwFVVkQ1DXM4DfVkmIbjrNlO0+4IjZwzb6St33LXgN0+FRgOh9Zw9RdlxX622Q0mmnUmlKYiRHe2IwTKM2+rJBg/ALe6iUrRHvb/oadbfjpKMDWDkcquanXEbsaMHif4k3zmCTD5Fj8AbJwn2A=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c223 s4626",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1luMYUzcjMUs3IyJbGEcLlxyDE0znTJKSkBmlKTmFpQWZerlF6Xre2IxQD88vyg7J7O4JN49tcS5tKgoNa/EzTnYLTMn1UVq7SH7wl0XEna7TdKbx7PO5kmui46L1moRRhcekBWkuZQxjM9BCrdlHMJYHMzIyMjAznqVGdN7XpR7Lyi1uCA/rzjVRQjDmyC3KhHWidXNDgp4NZbmlMz7z6nhnta65PAjRgX7uNo5u2/9lDAPK52y+dJHAX2/3J7Vp15yqLultiw+9JBB3i62Zvaumz/EzUJLJm+6+IFfzzene9XJF+xqrinNiw4++C9nG1M9a+eN72KmIcWTNl54z6frk9218sRzNlWX5KaFB+7/k7WJrpq54/o3UZPgookbzr/j1fHO6lxx/BmrinNS44L99/7KWEdVzth+7auIcVDhhPXn3vJoe2V2LD/2lEXZKbFh/r67f6StIiumb7v6RdgosKB/3dk33FqeGe3Ljj5hVnJMqJ+3985vKcuI8mlbr3wWMgzI71t75jWXpkd629Ijj5kUHeLr5u65/UvSIrxs6pbLnwQN/PN615xe8J//lYD+H/mR4NdXOON6hHgTZ5IeId7EGc0jxJs4o3mEeBNnNI8Qb+KM5hHiTZzRPEK8iTOaR4g3cUbzCPEmzmgeSS1ebNE8ohq7WKJ5RDV2sUTziGrsYonmEdXYxRLNI6qxixHNlvMMrKNI8+l8JiFD8IgQANnNPAo="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c223 s583",
+   "data": "eNqlkkFrE0EUx/OapImmVFBByEH3JChmd5MK1WBlcdfYgMXDltWbDJvXdHB2dpl5221uUrBHEb1kxW8gHsWbX8G7Bw9+BQ+9mo2xLbY5FBkYGOa93///fzMlKAEstCSSSWHStax2Z9W0J6vT7dy17RXLjSWpWAhUPilkEZfDcm2pUf0OwUIDdKUBbDGoe+evlvbyB9tEBYMwSlLFzVgNrf4pAOtprF4Irun5IyQ3VQol9Vy/xwV6zU9rB9m3L59/rb+89orooP3Du+Xd/HgZvKVC4mxOIVh2mvPF6pdOMQwApVr1a/lkPPb/8Y5Vo9rhIT7cDTEhHsseSwV5F0+kn0QI9iF4DcF7GIMeQzdf9FEOUEHwBoK3UC3vRqIimByOqyhb7npuz9c3tthkHxj37tj3jeuGpjhJcADBGJzmfG/1tVlyHW5jxLQ5YMTCopyFNB1Dx7ZvW/aq1ZeEQnB3ROYR7hzwGzNAlmVmtvK3pW0923jsT5ktLjUxGaKz3JcS1aH2v2ezLLnYB6e2gVqzIeYXeHFvhCzVaPz88M6pbI4S3IP8ij/Sk6cyN3mEcUqHhGO9Z57UH3huzNB9ucMEHzxJULECfaQB02/0G6K9KRI="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c285 s4350",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1hlMYUzcjMUs3IyJbGEcLlxyDE0zfTJKSkBmlKTmFpQWZerlF6Xre2IxQD88vyg7J7O4JN49tcQ5P7cgJ7UkNQUm6OYc7JaZk+oitbbb58324tc/PSZGLkj+5V3t5aLjorVahNGFB2QZaW5mDONzUCHGWg5hLJ5wYPJ0mamSbJCWlppqYKALtCNN18QAyLIwAHPBwNwyOcWQkZGRgZ31MzNm4IRQM3CCUosL8vOKU12EMAIJ5FMdUszA7mMtIo0ozSmZ959L0yO9bemRx0yKDvF1c/fc/iVpEV42dcvlT4IG/nm9a06/4tRwT2tdcvgRo4J9XO2c3bd+SpiHlU7ZfOmjgL5fbs/qUy851N1SWxYfesggbxdbM3vXzR/iZqElkzdd/MCv55vTverkC3Y115TmRQcf/JezjametfPGdzHTkOJJGy+859P1ye5aeeI5m6pLctPCA/f/ydpEV83ccf2bqElw0cQN59/x6nhnda44/oxVxTmpccH+e39lrKMqZ2y/9lXEOKhwwvpzb3m0vTI7lh97yqLslNgwf9/dP9JWkRXTt139ImwUWNC/7uwbbi3PjPZlR58wKzkm1M/be+e3lGVE+bStVz4LGQbk9609s4CB/7WgwV/ZkeDX1zjjeoR4E2eSHiHexBnNI8SbOKN5hHgTZzSPEG/ijOYR4k2c0TxCvIkzmkeIN3FG8wjxJs5oHkktXmzRPKIau1iieUQ1drFE84hq7GKJ5hHV2MWMZrb5jCHg0Q8Aw8TCjw=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c285 s505",
+   "data": "eNpjYGRgZGTSzUst0StJLrDS1zc0MtczAEIjKyNLAwNjfef8vJKi/Jyc1KLgkqLUxNzMvHRmdh5u1hlMYUzcjMUs3IyJbGEcLlxyDE0zfTJKSkBmlKTmFpQWZerlF6Xre2IxQD88vyg7J7O4JN49tcQ5P7cgJ7UkNQUm6OYc7JaZk+oitTZ/S/GL6mc17t3c0y5Xff7x1EXHRWu1CKMLD8gy0tzMGMbnoEKMtRzCWDzhwOTpMlMl2SAtLTXVwEDXwMDEQNfEAMiyMABzwcA8KSnZgJGRkYGd9QszZuCEUDNwglKLC/LzilNdhDACCeRTHVLMwO5jLSKNKM0pmfefW8szo33Z0SfMSo4J9fP23vktZRlRPm3rlc9ChgH5fWvPvObS9EhvW3rkMZOiQ3zd3D23f0lahJdN3XL5k6CBf17vmtOvODXc01qXHH7EqGAfVztn962fEuZhpVM2X/oooO+X27P61EsOdbfUlsWHHjLI28XWzN5184e4WWjJ5E0XP/Dr+eZ0rzr5gl3NNaV50cEH/+VsY6pn7bzxXcw0pHjSxgvv+XR9srtWnnjOpuqS3LTwwP1/sjbRVTN3XP8mahJcNHHD+Xe8Ot5ZnSuOP2NVcU5qXLD/3l8Z66jKGduvfRUxDiqcsP7cWx5tr8yO5ceesig7JTbM33f3j7RVZMX0bVe/CBsFFvSvOzuf6Y0QOOIBdHBJkg=="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29003/ControllerStreaming",
+   "sizes": "c55 s1 c285 s538",
+   "data": "eNqtks9r1EAUx/ftj+7qLj2opyKaQxEtJpndFrYuVQKJq4EWD5HoTYbk7XboZBJmpt3utYceRfSS+C8U/wVP/hke/R88aja0VWiFis7A8GaY9/2+95mpQQ2gbgrUlo6ykW33B0OLlHMwGjwiZN12U6FlyjnKQEukCRPTRrvXbeX1sN4F1ewCXQo73vU7taNie1frhYbGJNuXzErl1PYvEbBfpXKPM6XfPEPtpknGUWN8djh2gzHj6K186vc+31bftf/h7o/7376uffEeemsnt8DrLcz+rmYIl53Vq9h2bl7ShFP3vWI1IpMJIiEmIRt9c4OU0SapttUYxpROAKDWbp00LsLZ+59wfstDecAifHoYYaZZKsZ0n2vvxgV2JYDwGMK3EH6EHFQOo2IpQBGjhPAdhO+h1ThMeJNTMc1bKEz3eTG6SiXGhJZrbGxt9p8Y9wyl0yzDGMIcnJU/V9l5fEpDRbuYUGXFVNNocZ1GukIzKCHbZGj7QiPnzJ1r65fcNWAPTgVms5k1Wz9L6duvd7aDStNkQmkqInSWfSFQnntbDcH4MTjtHVSKTpH9S6NO8+U8w8II5qp8WMsXB5Sz+EWGki68zk0Bqp/xE7p/KJs="
+  }
+ ],
+ "calls": [
+  {
+   "operation": "Controller_GetLogArchive",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:5000:0983e29e08927052",
+   "connection": 0
+  },
+  {
+   "operation": "Controller_GetLogArchive",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "Controller_GetLogArchive failed <74> & stopped",
+    "detail": "ControllerServiceException{InnerException=ControllerServiceException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"Controller_GetLogArchive failed <74> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Controller_GetLogArchiveControllerServiceExceptionFault"
+   },
+   "connection": 1
+  },
+  {
+   "operation": "Controller_UploadFcsDemoFile",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "upload": {
+    "length": 0,
+    "seed": 2,
+    "text": "bytes:0:e3b0c44298fc1c14"
+   },
+   "result": [],
+   "connection": 2
+  },
+  {
+   "operation": "Controller_UploadFcsDemoFile",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "upload": {
+    "length": 300,
+    "seed": 3,
+    "text": "bytes:300:52d32c3e229fcc1c"
+   },
+   "result": [],
+   "connection": 3
+  },
+  {
+   "operation": "Controller_UploadFcsDemoFile",
+   "case": 2,
+   "arguments": [],
+   "callbacks": [],
+   "upload": {
+    "length": 100,
+    "seed": 14,
+    "text": "bytes:100:42504b9cd39badcd"
+   },
+   "fault": {
+    "reason": "Controller_UploadFcsDemoFile failed <75> & stopped",
+    "detail": "ControllerServiceException{InnerException=null,Message=\"Controller_UploadFcsDemoFile failed <75> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Controller_UploadFcsDemoFileControllerServiceExceptionFault"
+   },
+   "connection": 4
+  },
+  {
+   "operation": "Cytometer_UploadFirmware",
+   "case": 0,
+   "arguments": [
+    "\"Summary text \\u2713\""
+   ],
+   "callbacks": [],
+   "upload": {
+    "length": 5000,
+    "seed": 4,
+    "text": "bytes:5000:64460b7ce029eb16"
+   },
+   "result": [],
+   "connection": 5
+  },
+  {
+   "operation": "Cytometer_UploadFirmware",
+   "case": 1,
+   "arguments": [
+    "null"
+   ],
+   "callbacks": [],
+   "upload": {
+    "length": 10,
+    "seed": 5,
+    "text": "bytes:10:a04a99c80b163428"
+   },
+   "result": [],
+   "connection": 6
+  },
+  {
+   "operation": "Cytometer_UploadFirmware",
+   "case": 2,
+   "arguments": [
+    "\"\\u00dcn\\u00efc\\u00f8d\\u00e9 \\u2713 \\u65e5\\u672c \\ud83e\\uddea\""
+   ],
+   "callbacks": [],
+   "upload": {
+    "length": 100,
+    "seed": 14,
+    "text": "bytes:100:42504b9cd39badcd"
+   },
+   "fault": {
+    "reason": "Cytometer_UploadFirmware failed <76> & stopped",
+    "detail": "ControllerServiceException{InnerException=ControllerServiceException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"Cytometer_UploadFirmware failed <76> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Cytometer_UploadFirmwareControllerServiceExceptionFault"
+   },
+   "connection": 7
+  },
+  {
+   "operation": "Controller_DownloadCalibrationSettings",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:300:c02dc8bc5436a402",
+   "connection": 8
+  },
+  {
+   "operation": "Controller_DownloadCalibrationSettings",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:0:e3b0c44298fc1c14",
+   "connection": 9
+  },
+  {
+   "operation": "Controller_DownloadCalibrationSettings",
+   "case": 2,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "Controller_DownloadCalibrationSettings failed <77> & stopped",
+    "detail": "ControllerServiceException{InnerException=null,Message=\"Controller_DownloadCalibrationSettings failed <77> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Controller_DownloadCalibrationSettingsControllerServiceExceptionFault"
+   },
+   "connection": 10
+  },
+  {
+   "operation": "Controller_UploadCalibrationSettings",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "upload": {
+    "length": 4500,
+    "seed": 8,
+    "text": "bytes:4500:598212f9acc31b4c"
+   },
+   "result": [],
+   "connection": 11
+  },
+  {
+   "operation": "Controller_UploadCalibrationSettings",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "upload": {
+    "length": 100,
+    "seed": 14,
+    "text": "bytes:100:42504b9cd39badcd"
+   },
+   "fault": {
+    "reason": "Controller_UploadCalibrationSettings failed <78> & stopped",
+    "detail": "ControllerServiceException{InnerException=ControllerServiceException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"Controller_UploadCalibrationSettings failed <78> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Controller_UploadCalibrationSettingsControllerServiceExceptionFault"
+   },
+   "connection": 12
+  },
+  {
+   "operation": "Controller_ClearCalibrationSettings",
+   "case": 0,
+   "arguments": [
+    "\"Summary text \\u2713\""
+   ],
+   "callbacks": [],
+   "result": [],
+   "connection": 13
+  },
+  {
+   "operation": "Controller_ClearCalibrationSettings",
+   "case": 1,
+   "arguments": [
+    "null"
+   ],
+   "callbacks": [],
+   "result": [],
+   "connection": 14
+  },
+  {
+   "operation": "Controller_ClearCalibrationSettings",
+   "case": 2,
+   "arguments": [
+    "\"\""
+   ],
+   "callbacks": [],
+   "result": [],
+   "connection": 15
+  },
+  {
+   "operation": "Controller_ClearCalibrationSettings",
+   "case": 3,
+   "arguments": [
+    "\"<a & b> \\\"q\\\" 'a'\""
+   ],
+   "callbacks": [],
+   "fault": {
+    "reason": "Controller_ClearCalibrationSettings failed <79> & stopped",
+    "detail": "ControllerServiceException{InnerException=null,Message=\"Controller_ClearCalibrationSettings failed <79> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Controller_ClearCalibrationSettingsControllerServiceExceptionFault"
+   },
+   "connection": 16
+  },
+  {
+   "operation": "Worklist_GetCurrentFCSFile",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:4400:dd757be7d8da9074",
+   "connection": 17
+  },
+  {
+   "operation": "Worklist_GetCurrentFCSFile",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "Worklist_GetCurrentFCSFile failed <80> & stopped",
+    "detail": "ControllerServiceException{InnerException=ControllerServiceException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"Worklist_GetCurrentFCSFile failed <80> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Worklist_GetCurrentFCSFileControllerServiceExceptionFault"
+   },
+   "connection": 18
+  },
+  {
+   "operation": "Worklist_GetCompletedWorklistFCSFile",
+   "case": 0,
+   "arguments": [
+    "g:c0ffee00-003f-4000-8000-000000079cd1"
+   ],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:4096:5f43966c75a8a056",
+   "connection": 19
+  },
+  {
+   "operation": "Worklist_GetCompletedWorklistFCSFile",
+   "case": 1,
+   "arguments": [
+    "g:c0ffee00-0040-4000-8000-00000007bbc0"
+   ],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:257:9d205f79af4066fa",
+   "connection": 20
+  },
+  {
+   "operation": "Worklist_GetCompletedWorklistFCSFile",
+   "case": 2,
+   "arguments": [
+    "g:c0ffee00-0041-4000-8000-00000007daaf"
+   ],
+   "callbacks": [],
+   "fault": {
+    "reason": "Worklist_GetCompletedWorklistFCSFile failed <81> & stopped",
+    "detail": "ControllerServiceException{InnerException=null,Message=\"Worklist_GetCompletedWorklistFCSFile failed <81> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "http://tempuri.org/IControllerStreaming/Worklist_GetCompletedWorklistFCSFileControllerServiceExceptionFault"
+   },
+   "connection": 21
+  }
+ ]
+}

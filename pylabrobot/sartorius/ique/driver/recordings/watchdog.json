@@ -1,0 +1,179 @@
+{
+ "description": "Recorded through a TCP relay between a .NET Framework 4.8 WCF client (DuplexChannelFactory or ChannelFactory, NetTcpBinding with SecurityMode.None) and .NET Framework 4.8 WCF services that declare the full contract of the controller and the watchdog. calls lists every call in order: the arguments the service received and the values it answered, as canonical text, the callbacks it sent before answering, and the bytes of uploaded and downloaded streams (length and the start of their SHA-256; uploads are recordings.pattern(length, seed)). The session with the watchdog, then every IWatchdogStreamingService operation on a connection per call, each operation with each of its cases and a declared fault.",
+ "connections": [
+  {
+   "address": "net.tcp://127.0.0.2:29000/Watchdog",
+   "sizes": "c44 s1 c170 s299 c65 s76 c65 s385 c122 s132 c65 s296 c128 s138 c65 s354 c124 s134 c65 s299 c1 s1",
+   "data": "eNpjYGRgZGJSykst0StJLrDS1zc0MtczAEIjKyNLAwMD/fDEkuSMlPx0Zg4ebrbljBlaMIHg1KKyzORUfU90AffUkuCSxJLSYiJM5YQr5kczJoyJm7GYhZsxkS2Mw4VLjqFpNaOL1Fq77nvzH1VaekyMWrTyc/d0bRcdF63VIowuPCAFzIxhfE6sXOyMjIxsK5juMRoR79Sg1OKC/LziVEEMEXR38SOrKM0pscwoKQH5sDg5IzU3sVgvJbEkMTk/r6QoMblEL78oXd/IwMBE38Bc3zOvJDUnJ9O5skQvOCOxKDVFE6qzvLxcr9wYptZQP8LXJxhsmG5mXnFJYl5yKmdmcVBpXl5mXjpXZnFoAdAKIBNbAAlhBhA4ZERAIcPMxerEzs2YxMnNmMntytvqyt/OCAoqewbsYd3wzIAnS9LKaXvN1+nGL7L24AxrLxbmvMwc7O7BMATNPSKCbTAn4XXM7h8Selt+3PKZnVLKaLm8WQSnY/4x6QnCosy1Ijm1oCQzP4/PMy8vtQjOZfdNLS5OTE9lCakswExoMx2ITzcYNrklAtME0N8Y7oX7O6yNMayPMWwW4wzG4hmMVjPZglPzUlKLGMMmMIZNYmRlrsjNYclJzEufwZqap+vsMVMebplCWmJmTmqKgo2FkZ2CmkJxSX5BQWoKY9gMRidhLnAQOok6iQJDlNFJfCZ/JsjLCsmJpcWpCo/mTHaSnCkeXFlckpqrF5KZm5pfWgJ3M0g5IVuA2hWg2j3zyhJzMlP8C1KLEkHaEeaAY7DCUodg+AUDDYWyuZHYmFHPCYz6X0brVFb/+ereH5F6XVjg5wPMqOeGRH0jo6cJKVbDsrgwFjFMp0gDYxXDKYjULMvFiiv9gjxxcQ/r5m8b5Z1XZ515NunTLlGcnljKhGnCTCdSvIUzTWK4gew0qYhkHSK9GONMldA0SVgb8cmszl6fYKB4gsrPnBxwiZlazIfKxYwnXmA8xRw89+jg48Xu6wwvvnK+u/86ZjzxQ+KpndHfnEQHwNKWGHZhTAfJAyMNw0GIJKeIO8mBvCJ58/6XEzzKjiuSmMPMtxUV4/TKfWxJzpVEz+FMdRjOIDvVqaDaiEhBJlQvDomyivjEWmWtS0QOTiwqgXJ4kDmYsSsIjN3XzLvvLpyn4LnrSetPuyXTBTBjVxgSu82M3qYkWQ5LjyLYBDEdowyMYwzHIBKpKu5ECvJGqXWs0Ezfrc7d7vf5/adYv8HpjRXYEqkzSR7DmUQxHEF2ElVCtg+RakwJlYxE6CM6tbGzAwDuVc53"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29001/WatchdogStreaming",
+   "sizes": "c53 s1 c568 s126",
+   "data": "eNpjYGRgZGTSzkst0StJLrDS1zc0MtczAEIjKyNLAwND/fDEkuSMlPz04JKi1MTczLx0ZnYebtYGljAmbsZiFm7GRLYwDhcuOYamme4YSoNTi8oyk1P1PXHKhBbk5CemeOYVlyTm5AQkJmcnpqemsiYXJRsbcTJmSODS1+gitTYhIvKd7qJfjhtKyw+95Fq930XHRWu1CKMLD8gtpHiIMYzPgcstMycV4hgOnLY6cKUBVUFE5/3n0fbK7Fh+7CmLslNiw/x9d/9IW0VWTN929YuwUWBB/7qzb7i1PDPalx19wqzkmFA/b++d31KWEeXTtl75LGQYkN+39sxrLk2P9LalRx4zKTrE183dc/uXpEV42dQtlz8JGvjn9a45/YpTwz2tdcnhR4wK9nG1c3bf+ilhHlY6ZfOljwL6frk9q0+95FB3S21ZfOghg7xdbM3sXTd/iJuFlkzedPEDv55vTveqky/Y1VxTmhcdfPBfzjametbOG9/FTEOKJ2288J5P1ye7a+WJ52yqLslNCw/c/ydrE101c8f1b6ImwUUTN5x/x6vjndW54vgzVhXnpMYF++/9lbGOqpyx/dpXEeOgwgnrzxnN131Lik8ZGRkZ2FmrMJONP5WSTVBqcUF+XnGqixBG0gDGMMh2AKf/K9c="
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29001/WatchdogStreaming",
+   "sizes": "c53 s1 c367 s553",
+   "data": "eNpjYGRgZGTSzkst0StJLrDS1zc0MtczAEIjKyNLAwND/fDEkuSMlPz04JKi1MTczLx0ZnYebtZXTGFM3IzFLNyMiWxhHC5ccgxNM90xlAanFpVlJqfqe+KUCS3IyU9M8cwrLknMyQlITM5OTE9NZU0uSjY24mTMkMClr9lFau3lje9OuTkzuq+sVf/gti9B0kXHRWu1CKMLD8gtpHiIMYzPgcstMycV4hgOnLY6cKUBVUFE5yXz6fpkd6088ZxN1SW5aeGB+/9kbaKrZu64/k3UJLho4obz73h1vLM6Vxx/xqrinNS4YP+9vzLWUZUztl/7KmIcVDhh/bm3PNpemR3Ljz1lUXZKbJi/7+4faavIiunbrn4RNgos6F939s18Rm5GRkYGdtZTzJjBHUul4IYpdq1ITi0oyczPc0sszSlxEcIIYGA4hbUxhvUxhs1inMFYPIPRaiZbcGpeSmoRY9gExrBJjKzMFbk5LDmJeekzWFPzdJ09Zmphs1AhLREYjCkKNhZmdgpqCsUl+QUFqSmMYTMYHQQxHMNhmVFSAorG4uSM1NzEYr2UxJLE5Py8kqLE5BK9/KJ0fSMDAxN9A3N9z7yS1JycTOfKEr3gjMSi1BROxkxNqOby8nK9cmOYckP9CF+fYLB5upkgp+UB45bPMy8vtQhuLzpfjzkvM6eN0YHdN7W4GOiJmfyZIHmF5MTS4lSFR3MmO7CEVBakzhQPriwuSc3VC8nMTc0vLYHrR+iMJCVUoKYqQE31zCtLzMlM8S9ILUoEmYownhGcUACAvVx1"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29001/WatchdogStreaming",
+   "sizes": "c53 s1 c231 s487",
+   "data": "eNpjYGRgZGTSzkst0StJLrDS1zc0MtczAEIjKyNLAwND/fDEkuSMlPz04JKi1MTczLx0ZnYebtZHjGFM3IzFLNyMiWxhHC5ccgxNM70wlAanFpVlJqfqe+KUcckvz8vJT0yBKfDJT3fLzEl1kVpbzSj8Oaxlsdv2BQ4nD6wNnu2i46K1WoTRhQdkFSnuZQzjcxDHYQ+HBC6XMTIyMrCzPmLG9GYQ9bwZlFpckJ9XnOoihOFdkKvlCWjD7XoHWdxaS3NK5v3n1fHO6lxx/BmrinNS44L99/7KWEdVzth+7auIcVDhhPXn3vJoe2V2LD/2lEXZKbFh/r67f6StIiumb7v6RdgosKB/3dk33FqeGe3Ljj5hVnJMqJ+3985vKcuI8mlbr3wWMgzI71t75jWXpkd629Ijj5kUHeLr5u65/UvSIrxs6pbLnwQN/PN615x+xanhnta65PAjRgX7uNo5u2/9lDAPK52y+dJHAX2/3J7Vp15yqLultiw+9JBB3i62Zvaumz/EzUJLJm+6+IFfzzene9XJF+xqrinNiw4++C9nG1M9a+eN72KmIcWTNl54z6frk9218sRzNlWX5KaFB+7/k7WJrpq54/o3UZPgookbzs9jfidiPJ8pqBAczQBMGjBt"
+  },
+  {
+   "address": "net.tcp://127.0.0.2:29001/WatchdogStreaming",
+   "sizes": "c53 s1 c231 s488",
+   "data": "eNqtkc9q20AQxj2RHbt1CDQEEkIwOhX6x5LsBJwYE1Ssmtok9KCyyaGFLtJEXlivhHZj2dccnFtoCwWrb2BKXiGv0XtPfYCeS+1Q52J8CJSFhWG+md/37WYgA7DyQqAylBfVTbNSrRnW9FTr1UPLqpinVHldPwxcFSPtMRFo+bVi7ieQlSLIbBHoKik4j0uZy7SzIHUx7jMPzfbSjhMmgofUnwuOw6DFODo7N5M/t59/fP3QmZSuXv3e/dVwXjrPv2+CszZDPcQvkHV7awmnsL3MGQBk8rmRthjz4/+LOS9fDzyMFAtFi15w5WwshJ9mICMg10C+wRjkGOrpqovCxxjIJyBfIKcNejzLqQjGORTl5pu0vISpn9Pp7euNg9qR/lSXKowi9IGMwX6y4Kdw2FVq9srS62KPSsOninqhUDH1lBHGgVm1rH3TqpltoZBz1hwqw+3SGP1HwJ79G06SxEj25vKKeXZy7N7tKzMhFRUe2uttITC+5xqaYHwEdv4EpaQBvn9gHDv7bhhhqrtDqbBntEWfcua/jTCms/X3HIC7f/4LXyUHXg=="
+  }
+ ],
+ "calls": [
+  {
+   "operation": "GetStatus",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [
+    "ControllerServiceStatus{isRunning=false,isUpdating=true}"
+   ],
+   "connection": 0
+  },
+  {
+   "operation": "GetStatus",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "result": [
+    "null"
+   ],
+   "connection": 0
+  },
+  {
+   "operation": "GetStatus",
+   "case": 2,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "GetStatus failed <82> & stopped",
+    "detail": "WatchdogException{InnerException=WatchdogException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"GetStatus failed <82> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "WatchdogService/IWatchdogService/GetStatusWatchdogExceptionFault"
+   },
+   "connection": 0
+  },
+  {
+   "operation": "StopService",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "connection": 0
+  },
+  {
+   "operation": "StopService",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "StopService failed <83> & stopped",
+    "detail": "WatchdogException{InnerException=null,Message=\"StopService failed <83> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "WatchdogService/IWatchdogService/StopServiceWatchdogExceptionFault"
+   },
+   "connection": 0
+  },
+  {
+   "operation": "InstallUpdates",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "connection": 0
+  },
+  {
+   "operation": "InstallUpdates",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "InstallUpdates failed <84> & stopped",
+    "detail": "WatchdogException{InnerException=WatchdogException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"InstallUpdates failed <84> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "WatchdogService/IWatchdogService/InstallUpdatesWatchdogExceptionFault"
+   },
+   "connection": 0
+  },
+  {
+   "operation": "StartService",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "connection": 0
+  },
+  {
+   "operation": "StartService",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "StartService failed <85> & stopped",
+    "detail": "WatchdogException{InnerException=null,Message=\"StartService failed <85> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "WatchdogService/IWatchdogService/StartServiceWatchdogExceptionFault"
+   },
+   "connection": 0
+  },
+  {
+   "operation": "UploadInstallPackage",
+   "case": 0,
+   "arguments": [
+    "0"
+   ],
+   "callbacks": [],
+   "upload": {
+    "length": 300,
+    "seed": 12,
+    "text": "bytes:300:8eac8c2b3bef5352"
+   },
+   "result": [],
+   "connection": 1
+  },
+  {
+   "operation": "UploadInstallPackage",
+   "case": 1,
+   "arguments": [
+    "1"
+   ],
+   "callbacks": [],
+   "upload": {
+    "length": 100,
+    "seed": 14,
+    "text": "bytes:100:42504b9cd39badcd"
+   },
+   "fault": {
+    "reason": "UploadInstallPackage failed <86> & stopped",
+    "detail": "WatchdogException{InnerException=WatchdogException{InnerException=null,Message=\"inner cause \\u2713\",Type=\"System.TimeoutException\"},Message=\"UploadInstallPackage failed <86> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "WatchdogStreamingService/IWatchdogStreamingService/UploadInstallPackageWatchdogExceptionFault"
+   },
+   "connection": 2
+  },
+  {
+   "operation": "DownloadWatchdogLogFile",
+   "case": 0,
+   "arguments": [],
+   "callbacks": [],
+   "result": [],
+   "download": "bytes:260:6b17c86757bc65fd",
+   "connection": 3
+  },
+  {
+   "operation": "DownloadWatchdogLogFile",
+   "case": 1,
+   "arguments": [],
+   "callbacks": [],
+   "fault": {
+    "reason": "DownloadWatchdogLogFile failed <87> & stopped",
+    "detail": "WatchdogException{InnerException=null,Message=\"DownloadWatchdogLogFile failed <87> & stopped\",Type=\"System.InvalidOperationException\"}",
+    "action": "WatchdogStreamingService/IWatchdogStreamingService/DownloadWatchdogLogFileWatchdogExceptionFault"
+   },
+   "connection": 4
+  }
+ ]
+}
