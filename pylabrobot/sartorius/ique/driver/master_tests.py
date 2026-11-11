@@ -10,6 +10,7 @@ import logging
 import pathlib
 import tempfile
 import unittest
+import uuid
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -185,6 +186,7 @@ class FakeController:
       "controller_reset_devices": True,
       "controller_initialize_devices": None,
       "controller_get_device_statuses": lambda: [self.info(kind) for kind in ALL_DEVICES],
+      "controller_is1536_capable": True,
       "controller_power_on_cytometer": None,
       "controller_cytometer_has_power": True,
       "cytometer_is_powering_on": False,
@@ -227,6 +229,7 @@ class FakeController:
       "shaker_open_plate_lock": None,
       "shaker_close_plate_lock": None,
       "worklist_run": self.start_run,
+      "worklist_skip_to": None,
       "worklist_cancel": self.cancel,
       "worklist_get_current": self.get_current,
       "worklist_finalize": self.finalize,
@@ -491,6 +494,10 @@ class FakeController:
     """Scripted."""
     return await self._answer("controller_get_device_statuses", timeout=timeout)
 
+  async def controller_is1536_capable(self, *, timeout: Optional[float] = None) -> Any:
+    """Scripted."""
+    return await self._answer("controller_is1536_capable", timeout=timeout)
+
   async def controller_power_on_cytometer(self, *, timeout: Optional[float] = None) -> Any:
     """Scripted."""
     return await self._answer("controller_power_on_cytometer", timeout=timeout)
@@ -677,6 +684,10 @@ class FakeController:
   async def worklist_run(self, worklist: Any, *, timeout: Optional[float] = None) -> Any:
     """Scripted."""
     return await self._answer("worklist_run", worklist, timeout=timeout)
+
+  async def worklist_skip_to(self, id: uuid.UUID, *, timeout: Optional[float] = None) -> Any:
+    """Scripted."""
+    return await self._answer("worklist_skip_to", id, timeout=timeout)
 
   async def worklist_cancel(self, *, timeout: Optional[float] = None) -> Any:
     """Scripted."""

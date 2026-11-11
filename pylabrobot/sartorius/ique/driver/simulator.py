@@ -11,8 +11,10 @@ worklist runner.
 The runner executes worklists on a simulated clock that runs `speed` times faster than real
 time. It stamps every command with start and end times on that clock, sends the command
 callbacks, and turns every sampling dip into a burst of events: Poisson counts per 5 ms tick
-while the probe draws, reaching the detector after the tubing transit delay (25 s by default,
-so the first burst comes more than 20 s after acquisition starts), separated by the quiet gaps
+while the probe draws, reaching the detector after the tubing transit delay (by default the
+instrument's model at the pump's speed, 39 s at 29 rpm, so the first burst comes more than 20 s
+after acquisition starts, and a tube read starts recording as its sample arrives), separated by
+the quiet gaps
 the probe's time in air leaves. Events stream as float chunks of the instrument's size with the
 controller's running value count, and the controller's FCS file is written when the fluidics
 stop. Everything random comes from one generator seeded with `seed`, so a run is repeatable.
@@ -52,8 +54,12 @@ from typing import (
 
 from pylabrobot.sartorius.ique.driver import contract as wire
 from pylabrobot.sartorius.ique.driver.calibration import (
+  NOMINAL_PLATE_MODELS,
   NOMINAL_STATION_POSITIONS,
+  PLATE_FORMATS,
   Calibration,
+  DepthMap,
+  PlateFormat,
   SystemKind,
   nominal_calibration,
   write_calibration,
@@ -95,6 +101,7 @@ from pylabrobot.sartorius.ique.driver.fcs import (
   write_fcs,
 )
 from pylabrobot.sartorius.ique.driver.wcf import SoapFault
+from pylabrobot.sartorius.ique.driver.worklist import transit_delay
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +128,10 @@ _X_RANGE = (0.0, 131.0)
 _Y_RANGE = (0.0, 195.0)
 _Z_RANGE = (190.0, 250.0)
 _CONTACT_DEPTH = 3.0  # how far below z_low a contact search goes
+# A tube in the tube holder is touched this far above the empty holder's bottom; a tube check
+# passes from this far above it.
+_TUBE_CONTACT_HEIGHT = 1.0
+_TUBE_MIN_HEIGHT = 0.2
 _TOLERANCES: Dict[ContactToleranceType, str] = {
   "NewProbeAndTubing": "4",
   "DeckHeightValidation": "0.25",
@@ -186,6 +197,8 @@ _PRIMING_STEPS: Tuple[IQue3InstallationPrimeStep, ...] = (
   "End",
 )
 _STEP_DURATION = 60.0  # simulated seconds a purge or priming step takes
+# Wells a plate model's depth map measures, per plate format, as the mapping procedure does.
+_DEPTH_MAP_POINTS: Dict[PlateFormat, int] = {"Well96": 12, "Well384": 12, "Well1536": 35}
 
 Executor = Callable[[Any], Awaitable[Tuple[bool, str]]]
 
@@ -219,8 +232,9 @@ def simulated_calibration(
 
   Deck height `deck_height`, travel height at the top of Z, plate corners at the nominal
   positions, stations at their nominal positions with dip depths of 6 to 8 mm above the deck,
-  the tube holder 3 mm above it, and the generic plate models with a taught depth of 4 mm. It
-  suits the simulator; on an instrument it would miss wells.
+  the tube holder 3 mm above it, and the generic plate models with a taught depth of 4 mm, each
+  mapped for its own plate format with a flat depth map 3.5 mm above the deck, as the contact
+  sensor maps a plate model. It suits the simulator; on an instrument it would miss wells.
 
   Args:
     system_kind: The instrument family member.
@@ -245,7 +259,17 @@ def simulated_calibration(
     else entry
     for entry in base.plate_types
   )
-  models = tuple(dataclasses.replace(model, well_depth_offset=4.0) for model in base.plate_models)
+  formats: Dict[str, PlateFormat] = dict(zip(NOMINAL_PLATE_MODELS, PLATE_FORMATS))
+  models = tuple(
+    dataclasses.replace(
+      model,
+      well_depth_offset=4.0,
+      depth_map=DepthMap(
+        formats[model.name], (3.5,) * _DEPTH_MAP_POINTS[formats[model.name]], taught
+      ),
+    )
+    for model in base.plate_models
+  )
   return dataclasses.replace(
     base, instrument=instrument, stations=stations, plate_types=plate_types, plate_models=models
   )
@@ -285,6 +309,7 @@ class SimulatedController:
     calls: Every operation called, in order, as (name, arguments); tests read it.
     calibration_file: The stored calibration file, or None.
     deck_height: The height at which the probe touches the plate holder while the rail is in.
+    tube_in_holder: Whether a tube sits in the tube holder.
   """
 
   def __init__(
@@ -299,7 +324,7 @@ class SimulatedController:
     detector_powered: bool = True,
     other_client_connected: bool = False,
     system_id_mismatch: bool = False,
-    transit_delay: float = 25.0,
+    transit_delay: Optional[float] = None,
     events_per_second: float = 400.0,
     noise_per_second: float = 0.2,
     deck_height: float = SIMULATED_DECK_HEIGHT,
@@ -319,7 +344,8 @@ class SimulatedController:
       detector_powered: Whether the detector is on at the start.
       other_client_connected: Report another registered client at connect.
       system_id_mismatch: Make the device reset find that its stored system ID is stale.
-      transit_delay: Seconds the sample takes from the probe to the detector.
+      transit_delay: Seconds the sample takes from the probe to the detector; None for the
+        instrument's model at the pump's speed.
       events_per_second: Event rate while the probe draws from a well, before each well's own
         random factor.
       noise_per_second: Rate of stray events throughout an acquisition.
@@ -344,6 +370,7 @@ class SimulatedController:
     self.events_per_second = events_per_second
     self.noise_per_second = noise_per_second
     self.deck_height = deck_height
+    self.tube_in_holder = True
     self._drop_chunks: Set[int] = set(drop_data_chunks)
     self._drop_worklist_completed = drop_worklist_completed
     self._table = parameter_table_for_system_kind(system_type)
@@ -398,6 +425,7 @@ class SimulatedController:
     self._worklist_status: WorklistStatus = "NoActiveWorklist"
     self._worklist: Optional[Worklist] = None
     self._cancel = False
+    self._skip_to: Optional[uuid.UUID] = None
     self._runner: Optional[asyncio.Task[None]] = None
     self._background: Set[asyncio.Task[None]] = set()
     self._executors: Dict[type, Executor] = {
@@ -915,6 +943,11 @@ class SimulatedController:
     self._record("controller_get_device_statuses")
     return [self._info(kind) for kind in _DEVICE_ORDER if kind in self._configured]
 
+  async def controller_is1536_capable(self, *, timeout: Optional[float] = None) -> bool:
+    """Whether the instrument runs 1536-well plates; every simulated one does."""
+    self._record("controller_is1536_capable")
+    return True
+
   # -------------------------------------------------------------------------------------------
   # Detector
   # -------------------------------------------------------------------------------------------
@@ -1332,9 +1365,15 @@ class SimulatedController:
     self._values_sent = 0
     self._chunks_sent = 0
     self._cancel = False
+    self._skip_to = None
     self._worklist_status = "RunningWorklist"
     self._worklist = worklist
     self._runner = asyncio.ensure_future(self._run(worklist))
+
+  async def worklist_skip_to(self, id: uuid.UUID, *, timeout: Optional[float] = None) -> None:
+    """Skip forward to a command once the command running has ended."""
+    self._record("worklist_skip_to", id)
+    self._skip_to = id
 
   async def worklist_cancel(self, *, timeout: Optional[float] = None) -> None:
     """Ask the runner to stop."""
@@ -1445,7 +1484,10 @@ class SimulatedController:
       return
     rate = self._rng.uniform(0.6, 1.4) * self.events_per_second * TIME_STEP
     brightness = self._rng.uniform(0.5, 3.0)
-    arrival = start + self.transit_delay + self._rng.gauss(0.0, 0.02)
+    transit = self.transit_delay
+    if transit is None:
+      transit = float(transit_delay(self._pump_speed / 100))
+    arrival = start + transit + self._rng.gauss(0.0, 0.02)
     for tick in range(int(round((end - start) / TIME_STEP))):
       for _ in range(self._poisson(rate)):
         self._pending.append((arrival + tick * TIME_STEP, self._event_values(brightness)))
@@ -1572,6 +1614,16 @@ class SimulatedController:
         if self._monitored_red():
           stop_reason = "DeviceFaulted"
           break
+        if self._skip_to is not None:
+          if command.id != self._skip_to:
+            skipped = dataclasses.replace(command, execution_notes="Skipped")
+            self._emit("OnCommandStarted", skipped)
+            commands[index] = skipped
+            current = dataclasses.replace(current, commands=list(commands))
+            self._worklist = current
+            self._emit("OnCommandCompleted", skipped)
+            continue
+          self._skip_to = None
         self._emit("OnCommandStarted", command)
         start = self._now()
         completed, command_notes = await self._executors[type(command)](command)
@@ -1872,12 +1924,22 @@ class SimulatedController:
   async def _validate_deck_height(
     self, command: wire.ValidateDeckHeightCommand
   ) -> Tuple[bool, str]:
-    """ValidateDeckHeightCommand: load the rail, touch the deck, check the height."""
-    if not command.is_microfuge_tube_check:
-      self._close_lock_and_load()
+    """ValidateDeckHeightCommand: load the rail, touch the deck, check the height; or feel
+    for a tube in the tube holder, which must be touched 0.2 mm to the tolerance above the
+    bottom of the empty holder."""
     self._x, self._y = float(command.x), float(command.y)
-    result = self._find_contact(float(command.z_high), float(command.z_low), True)
     low, tolerance = float(command.z_low), float(command.z_tolerance)
+    if command.is_microfuge_tube_check:
+      contact = low + _TUBE_CONTACT_HEIGHT if self.tube_in_holder else low
+      self._z = float(command.z_high)
+      notes = f"ZLow={low} ZContact={contact} ZTolerance={tolerance}"
+      if contact < low + _TUBE_MIN_HEIGHT:
+        raise _WorklistError("No tube detected")
+      if contact > low + tolerance:
+        raise _WorklistError("Obstruction")
+      return True, notes
+    self._close_lock_and_load()
+    result = self._find_contact(float(command.z_high), low, True)
     contact = float(result.contact_z_location)
     if not result.found_contact:
       raise _WorklistError(f"Contact not found at {low}")

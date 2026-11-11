@@ -809,6 +809,24 @@ def instrument_keywords(
   return keywords
 
 
+def descriptive_keywords(keywords: Mapping[str, str]) -> Dict[str, str]:
+  """Return the keywords of a read file that describe the acquisition rather than the data.
+
+  Left out are those :func:`write_fcs` fills in from the events (data type and layout, the
+  per-parameter keywords, the event count, segment offsets). What remains, such as ``$CYT``,
+  ``$DATE``, ``$TIMESTEP`` and the ``IC$`` metadata, can be passed to :func:`write_fcs` for
+  other events of the same acquisition.
+
+  Args:
+    keywords: Keywords as :func:`read_fcs` returns them.
+  """
+  return {
+    key: value
+    for key, value in keywords.items()
+    if key.upper() not in _STRUCTURAL_KEYWORDS and _PARAMETER_KEYWORD.fullmatch(key.upper()) is None
+  }
+
+
 # ---------------------------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------------------------

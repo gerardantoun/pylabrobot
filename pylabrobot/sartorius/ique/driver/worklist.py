@@ -439,7 +439,7 @@ def _line_flush_time(pump_speed: float) -> int:
   return math.ceil(math.pow(rpm, -0.997) * 1200.0) + 2
 
 
-def _transit_delay(pump_speed: float) -> int:
+def transit_delay(pump_speed: float) -> int:
   """Return how many seconds a sample takes from the probe to the detector at a speed.
 
   The instrument's model is ceil(1100 * rpm^-0.98) - 2 s, with the speed in whole rpm (rounded
@@ -1787,7 +1787,7 @@ def tube_read_worklist(
   station = settings.station
   prime_seconds = _line_flush_time(PRIME_PUMP_SPEED)
   flush_seconds = _line_flush_time(settings.pump_speed)
-  delay = _transit_delay(settings.pump_speed)
+  delay = transit_delay(settings.pump_speed)
   prime_speed = _pump_speed(PRIME_PUMP_SPEED, "prime pump speed")
   commands: List[WorklistCommand] = [
     _tube_check(calibration, travel, tube_tolerance),
@@ -1890,7 +1890,7 @@ def qc_clean_test_worklist(
   pairs = _metadata(metadata)
   travel = _travel(calibration)
   direction = _pump_direction(calibration)
-  delay = _transit_delay(settings.pump_speed)
+  delay = transit_delay(settings.pump_speed)
   flush_seconds = _line_flush_time(settings.pump_speed)
   water_seconds = _whole_seconds(CLEAN_TEST_DURATION, "clean test duration")
   commands: List[WorklistCommand] = [

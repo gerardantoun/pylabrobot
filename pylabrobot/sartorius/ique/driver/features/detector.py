@@ -6,10 +6,13 @@ relay pulse alone would cut its power without shutting the fluidics down. Readin
 fluid and consumable states reach the driver only as the controller's status texts and device
 summary, which :meth:`Detector.request_status` gathers.
 
-Maintenance that the controller runs as worklists (cleans, priming, shutdown with a clean) is
-not here; the step functions of installation priming and of the decommissioning purge are. The
-purge leaves the instrument unusable until installation priming has been done, so its first step
-needs an explicit confirmation. Firmware updates are not offered.
+The detector's own maintenance routines (quick clean, long clean, unclog, debubble) run here as
+worklists of one command. Maintenance that also uses the probe (priming, the probe and tubing
+clean, start-up and shut-down with a clean) belongs to the instrument as a whole and is on
+:class:`~pylabrobot.sartorius.ique.device.IQueDevice`. The step functions of installation
+priming and of the decommissioning purge are here. The purge leaves the instrument unusable
+until installation priming has been done, so its first step needs an explicit confirmation.
+Firmware updates are not offered.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import asyncio
 import datetime
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Optional, Tuple
 
 from pylabrobot.sartorius.ique.driver.contract import (
   DeviceAlert,
@@ -26,6 +29,7 @@ from pylabrobot.sartorius.ique.driver.contract import (
   DeviceState,
   IQue3InstallationPrimeStep,
   IQue3PurgeStep,
+  Worklist,
 )
 from pylabrobot.sartorius.ique.driver.errors import (
   DeviceFaultedError,
@@ -33,9 +37,15 @@ from pylabrobot.sartorius.ique.driver.errors import (
   IQueError,
   IQueTimeoutError,
 )
+from pylabrobot.sartorius.ique.driver.worklist import (
+  detector_debubble_worklist,
+  detector_long_clean_worklist,
+  detector_quick_clean_worklist,
+  detector_unclog_worklist,
+)
 
 if TYPE_CHECKING:
-  from pylabrobot.sartorius.ique.driver.master import IQueDriver
+  from pylabrobot.sartorius.ique.driver.master import CompletedRun, IQueDriver, RunProgress
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +233,149 @@ class Detector:
       if loop.time() >= deadline:
         raise IQueTimeoutError(f"the detector was not ready within {timeout} s")
       await asyncio.sleep(self.poll_interval)
+
+  async def wait_until_ready_to_clean(self, timeout: Optional[float] = None) -> None:
+    """Wait until the detector can start fluidics maintenance, as before the start-up clean.
+
+    The detector must stay in the ready state meanwhile: any other state fails at once.
+
+    Args:
+      timeout: Seconds to wait; by default the detector's remaining operation time plus a
+        minute, or 25 minutes when it gives none.
+
+    Raises:
+      DeviceFaultedError: The detector faulted.
+      DeviceNotReadyError: The detector is in a state other than ready.
+      IQueTimeoutError: It could not start maintenance in time.
+    """
+    driver = self._driver
+    driver.require_setup()
+    client = driver.client
+    if timeout is None:
+      remaining = await driver.call(client.cytometer_get_operation_duration)
+      seconds = remaining.total_seconds()
+      timeout = seconds + READY_TIMEOUT_MARGIN if seconds > 0 else READY_TIMEOUT_WITHOUT_ESTIMATE
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+      await driver.request_status()
+      info = driver.devices.get("Cytometer")
+      if info is not None and info.state == "Faulted":
+        raise DeviceFaultedError("wait for the detector", {"Cytometer": info})
+      if info is None or info.state != "Ready":
+        raise DeviceNotReadyError("wait for the detector", "Cytometer", info)
+      if await driver.call(client.cytometer_is_ready_to_clean):
+        return
+      if loop.time() >= deadline:
+        raise IQueTimeoutError(f"the detector could not start maintenance within {timeout} s")
+      await asyncio.sleep(self.poll_interval)
+
+  async def _clean(
+    self,
+    worklist: Worklist,
+    on_progress: Optional[Callable[[RunProgress], None]],
+    timeout: Optional[float],
+  ) -> CompletedRun:
+    """Run one of the detector's own maintenance routines and wait for it to end."""
+    run = await self._driver.run_worklist(worklist, on_progress=on_progress, timeout=timeout)
+    logger.info("%s done", worklist.name)
+    return run
+
+  async def quick_clean(
+    self,
+    *,
+    on_progress: Optional[Callable[[RunProgress], None]] = None,
+    timeout: Optional[float] = None,
+  ) -> CompletedRun:
+    """Run the detector quick clean, about 11 minutes. The sampler tubing must be installed.
+
+    The detector runs the routine by itself and leaves its fluidics running afterwards.
+
+    Args:
+      on_progress: Called for the command when it starts and ends.
+      timeout: Seconds after which the run is cancelled; cancelling only stops waiting for the
+        detector.
+
+    Returns:
+      The completed run.
+
+    Raises:
+      WorklistActiveError: A worklist runs.
+      DeviceNotReadyError: The detector is not ready to run, or another device the routine
+        needs is not ready.
+      WorklistFailedError: The routine did not complete.
+    """
+    return await self._clean(detector_quick_clean_worklist(), on_progress, timeout)
+
+  async def long_clean(
+    self,
+    *,
+    on_progress: Optional[Callable[[RunProgress], None]] = None,
+    timeout: Optional[float] = None,
+  ) -> CompletedRun:
+    """Run the detector long clean, about 30 minutes; otherwise as :meth:`quick_clean`.
+
+    Args:
+      on_progress: Called for the command when it starts and ends.
+      timeout: Seconds after which the run is cancelled.
+
+    Returns:
+      The completed run.
+
+    Raises:
+      WorklistActiveError: A worklist runs.
+      DeviceNotReadyError: The detector or another device the routine needs is not ready.
+      WorklistFailedError: The routine did not complete.
+    """
+    return await self._clean(detector_long_clean_worklist(), on_progress, timeout)
+
+  async def unclog(
+    self,
+    *,
+    on_progress: Optional[Callable[[RunProgress], None]] = None,
+    timeout: Optional[float] = None,
+  ) -> CompletedRun:
+    """Run the detector unclog, about 10.5 minutes: when the sample line clogs, and monthly.
+
+    Otherwise as :meth:`quick_clean`.
+
+    Args:
+      on_progress: Called for the command when it starts and ends.
+      timeout: Seconds after which the run is cancelled.
+
+    Returns:
+      The completed run.
+
+    Raises:
+      WorklistActiveError: A worklist runs.
+      DeviceNotReadyError: The detector or another device the routine needs is not ready.
+      WorklistFailedError: The routine did not complete.
+    """
+    return await self._clean(detector_unclog_worklist(), on_progress, timeout)
+
+  async def debubble(
+    self,
+    *,
+    on_progress: Optional[Callable[[RunProgress], None]] = None,
+    timeout: Optional[float] = None,
+  ) -> CompletedRun:
+    """Run the detector debubble, about 13 minutes: the detector primes from its bottles.
+
+    It also ends the fluidics maintenance procedure. Otherwise as :meth:`quick_clean`.
+
+    Args:
+      on_progress: Called for the command when it starts and ends.
+      timeout: Seconds after which the run is cancelled.
+
+    Returns:
+      The completed run.
+
+    Raises:
+      WorklistActiveError: A worklist runs.
+      DeviceNotReadyError: The detector or another device the routine needs is not ready.
+      WorklistFailedError: The routine did not complete.
+    """
+    return await self._clean(detector_debubble_worklist(), on_progress, timeout)
 
   async def reset_consumables_odometer(self, timeout: float = LONG_RUNNING_TIMEOUT) -> None:
     """Clear the detector's record of fluidics consumable run time, as after replacing the

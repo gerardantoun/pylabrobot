@@ -145,7 +145,7 @@ def sample_well(ids: CommandIds, column: int) -> wire.SampleWellCommand:
   )
 
 
-def flush(ids: CommandIds, seconds: int = 30) -> wire.FlushMatryoshkaCommand:
+def flush(ids: CommandIds, seconds: int = 60) -> wire.FlushMatryoshkaCommand:
   """Dip in the buffer station for a while, ejecting the plate."""
   return wire.FlushMatryoshkaCommand(
     **ids.fields("Rinse"),
@@ -174,9 +174,13 @@ def stop_fluidics(ids: CommandIds) -> wire.StopFlowCytometerFluidicsCommand:
 
 
 def plate_worklist(
-  columns: int = 12, flush_seconds: int = 30, event_maximum: int = 17_500_000
+  columns: int = 12, flush_seconds: int = 60, event_maximum: int = 17_500_000
 ) -> Worklist:
-  """Return a plate read of row A: fluidics, pump, acquisition, the wells, flush, stop."""
+  """Return a plate read of row A: fluidics, pump, acquisition, the wells, flush, stop.
+
+  The flush lasts long enough by default for the last well's sample to reach the detector at
+  29 rpm before the fluidics stop.
+  """
   ids = CommandIds()
   commands: List[WorklistCommand] = [
     start_fluidics(ids),

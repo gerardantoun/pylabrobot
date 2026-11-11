@@ -20,6 +20,7 @@ import datetime
 import decimal
 import logging
 import pathlib
+import uuid
 from dataclasses import dataclass
 from typing import (
   AsyncIterator,
@@ -363,6 +364,10 @@ class ControllerApi(Protocol):
     """Controller_GetDeviceStatuses."""
     ...
 
+  async def controller_is1536_capable(self, *, timeout: Optional[float] = None) -> bool:
+    """Controller_Is1536Capable."""
+    ...
+
   async def controller_power_on_cytometer(self, *, timeout: Optional[float] = None) -> None:
     """Controller_PowerOnCytometer."""
     ...
@@ -567,6 +572,10 @@ class ControllerApi(Protocol):
     self, worklist: Optional[Worklist], *, timeout: Optional[float] = None
   ) -> None:
     """Worklist_Run."""
+    ...
+
+  async def worklist_skip_to(self, id: uuid.UUID, *, timeout: Optional[float] = None) -> None:
+    """Worklist_SkipTo."""
     ...
 
   async def worklist_cancel(self, *, timeout: Optional[float] = None) -> None:
@@ -1934,6 +1943,32 @@ class IQueDriver:
       return
     await self.call(self._client.worklist_cancel)
     logger.info("cancel requested")
+
+  async def skip_worklist_to(self, command_id: uuid.UUID) -> bool:
+    """Ask the controller to skip forward to a command of the running worklist.
+
+    The command running goes on to its end; every command after it up to `command_id` is then
+    reported as skipped (``execution_notes`` "Skipped", not completed), and the run continues
+    with `command_id`. An ID the worklist does not hold further on skips every remaining command.
+
+    Args:
+      command_id: The command to continue with.
+
+    Returns:
+      Whether the request was sent; False when no worklist runs.
+
+    Raises:
+      NotSetUpError: The driver is not set up.
+    """
+    self.require_setup()
+    status = await self.call(self._client.worklist_get_status)
+    self._worklist_status = status
+    if status != "RunningWorklist":
+      logger.info("no worklist runs; nothing to skip")
+      return False
+    await self.call(self._client.worklist_skip_to, command_id)
+    logger.info("skip to command %s requested", command_id)
+    return True
 
   # -------------------------------------------------------------------------------------------
   # Calibration

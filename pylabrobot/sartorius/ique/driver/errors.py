@@ -155,7 +155,8 @@ class UnsafeMotionError(IQueError):
 
 
 class PlateAccessError(IQueError):
-  """A plate was put on or taken off the plate holder while the plate rail is not out."""
+  """A plate was put on or taken off the plate holder while the plate rail is not out, or an
+  operation was given a plate that is not on the plate holder."""
 
 
 class DeviceOperationError(IQueError):
@@ -236,6 +237,25 @@ class WorklistTimeoutError(WorklistFailedError, TimeoutError):
 class EventDataError(IQueError):
   """The event data of a run is missing or inconsistent: absent FCS file, wrong checksum,
   unexpected parameters, or fewer events in the file than were streamed."""
+
+
+class WellIdentificationFailedError(IQueError):
+  """A plate read completed, but its events could not be assigned to wells, usually because
+  there are too few of them.
+
+  Attributes:
+    run: The completed run, with all its event data and the controller's FCS file.
+  """
+
+  def __init__(self, message: str, run: CompletedRun) -> None:
+    """Create the error.
+
+    Args:
+      message: What went wrong.
+      run: The completed run.
+    """
+    super().__init__(message)
+    self.run = run
 
 
 class CalibrationMissingError(IQueError):
