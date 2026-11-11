@@ -1,0 +1,28 @@
+docs/_static/devices.json
+  s_57312d54dca954::t_8b98425232fb18 1911-1926
+  s_57312d54dca954::t_8690f4b7798f86 1910
+docs/user_guide/sartorius/index.md
+  s_57312d54dca954::t_2c970aec9ce043 7
+docs/api/pylabrobot.sartorius.rst
+  s_57312d54dca954::t_ff87b40381caa6 6-8,18-119
+CHANGELOG.md
+  s_57312d54dca954::t_c578720d983da8 14
+docs/user_guide/sartorius/ique/hello-world.ipynb
+  s_57312d54dca954::t_e56e7e73c7ece1 1-719
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d17153d35ee6bdc59c796397e95c45eadd8a9c30",
+  "prompts": {},
+  "sessions": {
+    "s_57312d54dca954": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "51df9345-a58b-4a96-a661-fabb91bff2f8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Gerard Antoun <gerard.antoun@yahoo.com>"
+    }
+  }
+}
